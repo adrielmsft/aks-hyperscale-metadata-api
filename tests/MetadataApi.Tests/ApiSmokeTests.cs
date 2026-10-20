@@ -1,15 +1,14 @@
 using System.Net;
 using System.Text.Json;
 using Microsoft.AspNetCore.Hosting;
-using Microsoft.AspNetCore.Mvc.Testing;
 
 namespace MetadataApi.Tests;
 
-public sealed class ApiSmokeTests : IClassFixture<WebApplicationFactory<Program>>
+public sealed class ApiSmokeTests : IClassFixture<MetadataApiFactory>
 {
-    private readonly WebApplicationFactory<Program> factory;
+    private readonly MetadataApiFactory factory;
 
-    public ApiSmokeTests(WebApplicationFactory<Program> factory)
+    public ApiSmokeTests(MetadataApiFactory factory)
     {
         this.factory = factory;
     }
