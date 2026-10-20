@@ -367,6 +367,54 @@ Restore -> Build -> Unit/storage tests + coverage
 - Fail the pipeline on build or test failures. Upload test results, coverage, and sanitized diagnostic logs, including on failure; always stop started processes and clean up temporary databases.
 - Before submission, ensure at least one successful E2E workflow run is publicly visible and link directly to that run from the README.
 
+## Implementation Order and Breakdown
 
+Build in small vertical slices: keep each milestone runnable and tested, make a logical commit when it works, and update the README as commands and behavior become available. Until authentication is implemented, bind the server to localhost only.
 
-    
+### 1. First working slice: create and read an application
+
+- Scaffold the ASP.NET Core API, xUnit test project, and pinned SDK configuration.
+- Add EF Core, file-backed SQLite, an initial migration, and the required connection settings.
+- Implement POST `/api/v1/applications` and GET `/api/v1/applications/{applicationId}` with request/response DTOs, basic validation, and Problem Details.
+- Add tests and a minimal GitHub Actions build-and-test workflow.
+- **Done when:** an application can be created, the server restarted, and the same record retrieved; tests and CI pass.
+
+### 2. Complete Application CRUD
+
+- Add PUT, DELETE, and bounded list pagination.
+- Complete application field validation and test replacement semantics, missing resources, and pagination boundaries.
+- **Done when:** all Application operations match the API contract and have passing tests.
+
+### 3. Maintainers and relationships
+
+- Add Maintainer CRUD and pagination, plus the association table and migration.
+- Implement idempotent association PUT/DELETE and relationship list endpoints.
+- Test foreign keys, duplicate-link prevention, cascading link deletion, and transaction behavior against real SQLite.
+- **Done when:** both resources and their many-to-many relationships work without orphaned or duplicate links.
+
+### 4. Real HTTP E2E pipeline
+
+- Extend CI to migrate a temporary database, start the API, wait for readiness, and run HttpClient tests against the actual process.
+- Cover CRUD, relationships, validation, response contracts, and persistence across restart.
+- Publish unit coverage and test artifacts; ensure cleanup runs on failure.
+- **Done when:** a visible successful Actions run proves the major features work end to end. Extend this suite as later features land.
+
+### 5. Authentication and reliability
+
+- Add configured API-key authentication and startup configuration validation.
+- Complete centralized error handling, bounded database contention handling, request-body limits, rate limiting, and minimal liveness/readiness endpoints.
+- Add unit and E2E coverage for authentication failures, 413/429/503 responses, and configured limits.
+- **Done when:** resource endpoints require authentication and failure paths behave predictably without exposing internal details.
+
+### 6. Observability
+
+- Add structured logs, trace correlation, OpenTelemetry traces and metrics, and optional OTLP export.
+- Verify privacy safeguards and bounded buffering; add the local collector export smoke test to CI.
+- **Done when:** an actual HTTP request produces verifiable exported telemetry, and the API also runs without a telemetry backend.
+
+### 7. Submission verification
+
+- Verify the documented quick start from a clean checkout and run the complete pipeline.
+- Finish the OpenAPI reference and README: design choices, storage guarantees and limits, production features, standout observability feature, and approximate time spent.
+- Link a successful E2E run for the final implementation, verify the public repository and meaningful commit history, and prepare submission URLs.
+- **Done when:** all deliverables are present, reproducible, and verified before the time limit. If time tightens, reduce optional feature breadth rather than compromise required functionality or tests.

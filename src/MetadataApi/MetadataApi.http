@@ -1,0 +1,11 @@
+@MetadataApi_HostAddress = http://localhost:5108
+
+### Liveness (process health only; no database checks yet)
+GET {{MetadataApi_HostAddress}}/health/live
+Accept: text/plain
+
+### OpenAPI document (Development only)
+GET {{MetadataApi_HostAddress}}/openapi/v1.json
+Accept: application/json
+
+###
