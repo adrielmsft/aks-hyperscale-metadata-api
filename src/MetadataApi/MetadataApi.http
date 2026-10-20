@@ -1,4 +1,5 @@
 @MetadataApi_HostAddress = http://localhost:5108
+@apiKey = {{$processEnv Authentication__ApiKey}}
 
 ### Liveness (process health only; no database checks yet)
 GET {{MetadataApi_HostAddress}}/health/live
@@ -11,6 +12,7 @@ Accept: application/json
 ### Create an application
 # @name createApplication
 POST {{MetadataApi_HostAddress}}/api/v1/applications
+Authorization: Bearer {{apiKey}}
 Content-Type: application/json
 
 {
@@ -25,18 +27,22 @@ Content-Type: application/json
 
 ### Read the application created above (REST Client response variable)
 GET {{MetadataApi_HostAddress}}/api/v1/applications/{{createApplication.response.body.$.id}}
+Authorization: Bearer {{apiKey}}
 Accept: application/json
 
 ### List applications (defaults: limit 20, offset 0; ID ascending)
 GET {{MetadataApi_HostAddress}}/api/v1/applications
+Authorization: Bearer {{apiKey}}
 Accept: application/json
 
 ### Explicit page; follow nextOffset while it is not null
 GET {{MetadataApi_HostAddress}}/api/v1/applications?limit=10&offset=0
+Authorization: Bearer {{apiKey}}
 Accept: application/json
 
 ### Replace all metadata; omitted optional fields are cleared
 PUT {{MetadataApi_HostAddress}}/api/v1/applications/{{createApplication.response.body.$.id}}
+Authorization: Bearer {{apiKey}}
 Content-Type: application/json
 
 {
@@ -47,9 +53,11 @@ Content-Type: application/json
 
 ### Delete application and association links only (never maintainers)
 DELETE {{MetadataApi_HostAddress}}/api/v1/applications/{{createApplication.response.body.$.id}}
+Authorization: Bearer {{apiKey}}
 
 ### Missing replacement target: 404 (PUT does not create)
 PUT {{MetadataApi_HostAddress}}/api/v1/applications/ffffffff-ffff-ffff-ffff-ffffffffffff
+Authorization: Bearer {{apiKey}}
 Content-Type: application/json
 
 {
@@ -58,13 +66,16 @@ Content-Type: application/json
 
 ### Missing deletion target: 404 (including repeat deletion)
 DELETE {{MetadataApi_HostAddress}}/api/v1/applications/ffffffff-ffff-ffff-ffff-ffffffffffff
+Authorization: Bearer {{apiKey}}
 
 ### Invalid pagination: 400 (not silently clamped)
 GET {{MetadataApi_HostAddress}}/api/v1/applications?limit=101&offset=-1
+Authorization: Bearer {{apiKey}}
 Accept: application/json
 
 ### Invalid replacement: 400 (Title is required)
 PUT {{MetadataApi_HostAddress}}/api/v1/applications/{{createApplication.response.body.$.id}}
+Authorization: Bearer {{apiKey}}
 Content-Type: application/json
 
 {
@@ -73,6 +84,7 @@ Content-Type: application/json
 
 ### ID is immutable: 400 (unknown request property)
 PUT {{MetadataApi_HostAddress}}/api/v1/applications/{{createApplication.response.body.$.id}}
+Authorization: Bearer {{apiKey}}
 Content-Type: application/json
 
 {
@@ -82,20 +94,24 @@ Content-Type: application/json
 
 ### Unsupported replacement media type: 415
 PUT {{MetadataApi_HostAddress}}/api/v1/applications/{{createApplication.response.body.$.id}}
+Authorization: Bearer {{apiKey}}
 Content-Type: text/plain
 
 Microsoft Garage
 
 ### Missing application: 404 Problem Details
 GET {{MetadataApi_HostAddress}}/api/v1/applications/ffffffff-ffff-ffff-ffff-ffffffffffff
+Authorization: Bearer {{apiKey}}
 Accept: application/json
 
 ### Invalid application ID: 400 validation Problem Details
 GET {{MetadataApi_HostAddress}}/api/v1/applications/not-a-guid
+Authorization: Bearer {{apiKey}}
 Accept: application/json
 
 ### Invalid metadata: 400 with field-keyed errors
 POST {{MetadataApi_HostAddress}}/api/v1/applications
+Authorization: Bearer {{apiKey}}
 Content-Type: application/json
 
 {
@@ -107,6 +123,7 @@ Content-Type: application/json
 ### Create a maintainer
 # @name createMaintainer
 POST {{MetadataApi_HostAddress}}/api/v1/maintainers
+Authorization: Bearer {{apiKey}}
 Content-Type: application/json
 
 {
@@ -116,10 +133,12 @@ Content-Type: application/json
 
 ### Get the created maintainer
 GET {{MetadataApi_HostAddress}}/api/v1/maintainers/{{createMaintainer.response.body.$.id}}
+Authorization: Bearer {{apiKey}}
 Accept: application/json
 
 ### Fully replace the maintainer's name and email
 PUT {{MetadataApi_HostAddress}}/api/v1/maintainers/{{createMaintainer.response.body.$.id}}
+Authorization: Bearer {{apiKey}}
 Content-Type: application/json
 
 {
@@ -129,19 +148,24 @@ Content-Type: application/json
 
 ### List a bounded page ordered by ID ascending
 GET {{MetadataApi_HostAddress}}/api/v1/maintainers?limit=20&offset=0
+Authorization: Bearer {{apiKey}}
 Accept: application/json
 
 ### Delete the maintainer and links, not associated applications
 DELETE {{MetadataApi_HostAddress}}/api/v1/maintainers/{{createMaintainer.response.body.$.id}}
+Authorization: Bearer {{apiKey}}
 
 ### Missing maintainer: 404 Problem Details
 GET {{MetadataApi_HostAddress}}/api/v1/maintainers/ffffffff-ffff-ffff-ffff-ffffffffffff
+Authorization: Bearer {{apiKey}}
 
 ### Invalid maintainer ID: 400 with field errors
 GET {{MetadataApi_HostAddress}}/api/v1/maintainers/not-a-guid
+Authorization: Bearer {{apiKey}}
 
 ### Invalid maintainer metadata: 400 with both field errors
 POST {{MetadataApi_HostAddress}}/api/v1/maintainers
+Authorization: Bearer {{apiKey}}
 Content-Type: application/json
 
 {
@@ -151,3 +175,4 @@ Content-Type: application/json
 
 ### Invalid pagination: 400, never clamped
 GET {{MetadataApi_HostAddress}}/api/v1/maintainers?limit=101&offset=10001
+Authorization: Bearer {{apiKey}}
