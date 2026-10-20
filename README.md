@@ -133,6 +133,41 @@ Errors use `application/problem+json`:
 Use the Development OpenAPI document for operation schemas and
 [MetadataApi.http](src/MetadataApi/MetadataApi.http) for successful and failing requests.
 
+### Associations
+
+Manage links separately from resource metadata; applications and maintainers may
+have zero or more links. There is no association ID or request body.
+
+| Method | Path | Success |
+| --- | --- | --- |
+| PUT | `/api/v1/applications/{applicationId}/maintainers/{maintainerId}` | 204, ensure the link exists |
+| DELETE | `/api/v1/applications/{applicationId}/maintainers/{maintainerId}` | 204, ensure the link is absent |
+| GET | `/api/v1/applications/{applicationId}/maintainers?limit=20&offset=0` | 200, page of Maintainer resources |
+| GET | `/api/v1/maintainers/{maintainerId}/applications?limit=20&offset=0` | 200, page of Application resources |
+
+PUT and DELETE require both resources to exist (404 otherwise). Repeated PUTs,
+including concurrent duplicates, create just one link; repeated DELETEs return
+204 even if the link is already absent. Both mutations return no content and
+never modify resource metadata. Invalid or empty GUIDs return 400 validation
+Problem Details with field-keyed errors.
+
+Nested lists use the same `items`, `limit`, `offset`, and `nextOffset` envelope
+and pagination rules described above: limit 1–100 (default 20), offset 0–10,000
+(default 0), returned-resource ID ascending, and a `limit + 1` database fetch.
+A missing parent returns 404; an existing parent without links returns an empty
+page. Concurrent writes may shift pages.
+
+The initial migration already supplies the composite primary key, foreign keys,
+cascading link deletion, and reverse-lookup index; no additional migration is
+needed. Short SQLite write transactions protect parent checks and link changes;
+a parameterized `ON CONFLICT (ApplicationId, MaintainerId) DO NOTHING` insert
+makes duplicate PUTs successful without suppressing other constraint failures.
+Resource updates preserve links; deleting either resource removes only its own
+links, never the resources on the other side. Links persist across restarts of
+the API using the same database file. SQLite/service tests, API tests, and
+real-Kestrel E2E tests cover these guarantees; the E2E suite also verifies link
+removal and both resource-deletion directions across restart.
+
 ## Maintainer API
 
 | Method | Path | Success |

@@ -131,6 +131,39 @@ Content-Type: application/json
 GET {{MetadataApi_HostAddress}}/api/v1/maintainers?limit=20&offset=0
 Accept: application/json
 
+### Create an application for association examples (earlier application may have been deleted)
+# @name createAssociationApplication
+POST {{MetadataApi_HostAddress}}/api/v1/applications
+Content-Type: application/json
+
+{
+  "title": "Microsoft Garage Locations",
+  "description": "Garage locations and staff."
+}
+
+### Ensure the Garage application-maintainer link exists (no body; 204)
+PUT {{MetadataApi_HostAddress}}/api/v1/applications/{{createAssociationApplication.response.body.$.id}}/maintainers/{{createMaintainer.response.body.$.id}}
+
+### Repeat PUT: still 204, never a duplicate link
+PUT {{MetadataApi_HostAddress}}/api/v1/applications/{{createAssociationApplication.response.body.$.id}}/maintainers/{{createMaintainer.response.body.$.id}}
+
+### List associated maintainer resources, ordered by maintainer ID
+GET {{MetadataApi_HostAddress}}/api/v1/applications/{{createAssociationApplication.response.body.$.id}}/maintainers?limit=20&offset=0
+Accept: application/json
+
+### List associated application resources, ordered by application ID
+GET {{MetadataApi_HostAddress}}/api/v1/maintainers/{{createMaintainer.response.body.$.id}}/applications?limit=20&offset=0
+Accept: application/json
+
+### Remove the link only (no body; repeat requests also return 204)
+DELETE {{MetadataApi_HostAddress}}/api/v1/applications/{{createAssociationApplication.response.body.$.id}}/maintainers/{{createMaintainer.response.body.$.id}}
+
+### Missing association target: 404 Problem Details
+PUT {{MetadataApi_HostAddress}}/api/v1/applications/{{createAssociationApplication.response.body.$.id}}/maintainers/ffffffff-ffff-ffff-ffff-ffffffffffff
+
+### Invalid association IDs: 400 with both field errors
+PUT {{MetadataApi_HostAddress}}/api/v1/applications/not-a-guid/maintainers/00000000-0000-0000-0000-000000000000
+
 ### Delete the maintainer and links, not associated applications
 DELETE {{MetadataApi_HostAddress}}/api/v1/maintainers/{{createMaintainer.response.body.$.id}}
 
