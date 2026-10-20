@@ -5,6 +5,8 @@ namespace MetadataApi.E2E.Tests;
 
 public sealed class ApiServerFixture : IAsyncLifetime
 {
+    // EF tooling copies BuildHost files into the shared API output directory, even with --no-build.
+    private static readonly SemaphoreSlim MigrationToolGate = new(1, 1);
     private readonly string root = FindRepositoryRoot();
     private readonly string configuration = typeof(ApiServerFixture).Assembly
         .GetCustomAttribute<AssemblyConfigurationAttribute>()?.Configuration
@@ -29,7 +31,16 @@ public sealed class ApiServerFixture : IAsyncLifetime
         var initialized = false;
         try
         {
-            await ApplyMigrationsAsync();
+            await MigrationToolGate.WaitAsync();
+            try
+            {
+                await ApplyMigrationsAsync();
+            }
+            finally
+            {
+                MigrationToolGate.Release();
+            }
+
             await StartServerAsync();
             initialized = true;
         }
