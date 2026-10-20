@@ -47,7 +47,7 @@ future resource endpoints. Missing/invalid credentials return the same `401`
 resource lookup. Keys are compared using constant-time SHA-256 hash comparison.
 The default/fallback authorization policy protects new endpoints automatically;
 new health endpoints must explicitly call `.AllowAnonymous()`. `/health/live`
-and the Development-only `/openapi/v1.json` document are explicitly anonymous.
+and `/health/ready`, plus the Development-only `/openapi/v1.json` document, are explicitly anonymous.
 
 For the PowerShell resource examples below, supply `-Headers $headers` on each
 `Invoke-RestMethod` call:
@@ -398,6 +398,11 @@ Commands above use Windows PowerShell paths. On Linux or macOS, use
 `curl` instead of `curl.exe`.
 
 ## Reliability
+
+Middleware runs in this order: exception handling and status-code pages, rate
+limiting and body limits, authentication, then authorization. Unauthenticated
+requests consume the same rate-limit budget, so floods are throttled before
+authentication. Both health probes are anonymous and rate-limit-exempt.
 
 The API uses ASP.NET Core's built-in **global fixed-window rate limiter**: one
 shared budget per API process, **1,000 requests per 60 seconds** by default, with

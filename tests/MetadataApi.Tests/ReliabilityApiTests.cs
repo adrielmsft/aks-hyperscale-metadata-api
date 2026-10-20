@@ -34,6 +34,25 @@ public sealed class ReliabilityApiTests
         }
     }
 
+    [Fact]
+    public async Task UnauthenticatedRequests_AreThrottled_WhileHealthRemainsAnonymous()
+    {
+        using var factory = new MetadataApiFactory(new Dictionary<string, string>
+        {
+            ["RateLimiting:PermitLimit"] = "1", ["RateLimiting:WindowSeconds"] = "3600"
+        });
+        using var client = factory.CreateUnauthenticatedClient();
+        using var first = await client.GetAsync("/api/v1/applications");
+        Assert.Equal(HttpStatusCode.Unauthorized, first.StatusCode);
+        using var rejected = await client.GetAsync("/api/v1/applications");
+        await AssertProblemAsync(rejected, HttpStatusCode.TooManyRequests);
+        foreach (var path in new[] { "/health/live", "/health/ready" })
+        {
+            using var health = await client.GetAsync(path);
+            Assert.Equal(HttpStatusCode.OK, health.StatusCode);
+        }
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
