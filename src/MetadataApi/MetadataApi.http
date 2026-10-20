@@ -103,3 +103,51 @@ Content-Type: application/json
   "version": "v1",
   "website": "ftp://example.com"
 }
+
+### Create a maintainer
+# @name createMaintainer
+POST {{MetadataApi_HostAddress}}/api/v1/maintainers
+Content-Type: application/json
+
+{
+  "name": "Garage Makers",
+  "email": "Garage.Makers@example.com"
+}
+
+### Get the created maintainer
+GET {{MetadataApi_HostAddress}}/api/v1/maintainers/{{createMaintainer.response.body.$.id}}
+Accept: application/json
+
+### Fully replace the maintainer's name and email
+PUT {{MetadataApi_HostAddress}}/api/v1/maintainers/{{createMaintainer.response.body.$.id}}
+Content-Type: application/json
+
+{
+  "name": "Garage Lab Team",
+  "email": "Garage.Lab@example.com"
+}
+
+### List a bounded page ordered by ID ascending
+GET {{MetadataApi_HostAddress}}/api/v1/maintainers?limit=20&offset=0
+Accept: application/json
+
+### Delete the maintainer and links, not associated applications
+DELETE {{MetadataApi_HostAddress}}/api/v1/maintainers/{{createMaintainer.response.body.$.id}}
+
+### Missing maintainer: 404 Problem Details
+GET {{MetadataApi_HostAddress}}/api/v1/maintainers/ffffffff-ffff-ffff-ffff-ffffffffffff
+
+### Invalid maintainer ID: 400 with field errors
+GET {{MetadataApi_HostAddress}}/api/v1/maintainers/not-a-guid
+
+### Invalid maintainer metadata: 400 with both field errors
+POST {{MetadataApi_HostAddress}}/api/v1/maintainers
+Content-Type: application/json
+
+{
+  "name": " ",
+  "email": "Garage <garage@example.com>"
+}
+
+### Invalid pagination: 400, never clamped
+GET {{MetadataApi_HostAddress}}/api/v1/maintainers?limit=101&offset=10001

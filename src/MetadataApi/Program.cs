@@ -15,6 +15,7 @@ builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<DatabaseExceptionHandler>();
 builder.Services.AddHealthChecks();
 builder.Services.AddScoped<IApplicationService, ApplicationService>();
+builder.Services.AddScoped<IMaintainerService, MaintainerService>();
 builder.Services.ConfigureHttpJsonOptions(options =>
 {
     options.SerializerOptions.UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow;
@@ -42,6 +43,7 @@ if (app.Environment.IsDevelopment())
 
 app.MapHealthChecks("/health/live");
 app.MapApplications();
+app.MapMaintainers();
 
 app.Run();
 
