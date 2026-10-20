@@ -9,7 +9,8 @@ The first Application slice supports creating and retrieving metadata backed by
 SQLite and EF Core. The schema also includes Maintainers and their associations.
 Liveness, development OpenAPI, input validation, and Problem Details are available.
 Updates, deletion, listing, Maintainer/association endpoints, authentication,
-telemetry, and GitHub Actions are not implemented yet.
+and telemetry are not implemented yet. GitHub Actions builds the solution,
+reports coverage, and runs separate-process HTTP E2E tests for the implemented API.
 
 ## Prerequisites
 
@@ -146,10 +147,11 @@ Review generated migrations for destructive changes before applying them.
 ## Test
 
 ```powershell
+dotnet tool restore
 dotnet test MetadataApi.slnx
 ```
 
-The xUnit project contains:
+The unit/integration xUnit project contains:
 
 - In-process API smoke tests using `WebApplicationFactory`: liveness, OpenAPI
   availability in Development and its absence in Production, and Problem Details
@@ -165,12 +167,34 @@ The xUnit project contains:
 
 Tests create isolated temporary databases, apply real migrations, and remove
 their files during cleanup; no manual database setup is required for tests.
-These are integration checks, not the planned separate-process E2E suite.
 
-To collect coverage using the included Coverlet collector:
+The separate [E2E project](tests/MetadataApi.E2E.Tests) starts the built API as a
+real child process running Kestrel in Production mode, applies migrations to its
+own temporary SQLite database, and sends requests over a real loopback TCP port.
+It does not use `WebApplicationFactory`, mock storage, or shared API DTOs.
+
+E2E checks cover create/read behavior, Location headers, normalized metadata,
+explicit nulls, duplicate titles, validation and JSON errors, 404/415 responses,
+and persistence across an API process restart. Kestrel chooses a free port;
+startup waits for its listening signal and verifies liveness rather than sleeping
+for a fixed duration. Startup is bounded, test HTTP calls have timeouts, and the
+fixture stops its own processes and deletes its temporary database on completion.
+Migration and server logs remain under `artifacts/e2e` for diagnosis.
+
+Run just the real HTTP suite:
 
 ```powershell
-dotnet test MetadataApi.slnx --collect:"XPlat Code Coverage" --results-directory artifacts\TestResults
+dotnet tool restore
+dotnet test tests\MetadataApi.E2E.Tests\MetadataApi.E2E.Tests.csproj --configuration Release
+```
+
+No manually running server is needed. This command builds the API through a
+build-only project reference; the tests communicate with it exclusively over HTTP.
+
+To collect unit/integration coverage using the included Coverlet collector:
+
+```powershell
+dotnet test tests\MetadataApi.Tests\MetadataApi.Tests.csproj --collect:"XPlat Code Coverage" --results-directory artifacts\TestResults
 ```
 
 Coverage reports are written as `coverage.cobertura.xml` under the results
@@ -182,6 +206,29 @@ without interrupting that server, use separate Release outputs:
 ```powershell
 dotnet test MetadataApi.slnx --configuration Release
 ```
+
+## GitHub Actions
+
+The [CI workflow](.github/workflows/ci.yml) runs on pushes, pull requests, and
+manual dispatches:
+
+1. Install the SDK selected by `global.json`, restore local tools and packages,
+   and build Release.
+2. Run unit/SQLite integration tests and collect Coverlet coverage.
+3. Run the real HTTP E2E suite, which migrates, starts, exercises, restarts, and
+   stops its own API process.
+4. Write line/branch coverage to the Actions job summary and upload TRX results,
+   Cobertura coverage, and test-only migration/server logs, including on failure.
+
+No cloud deployment, database service, or production credentials are required.
+The API currently has no authentication; tests use only synthetic metadata.
+Logs do not include request bodies or credentials.
+
+See the [Actions workflow page](https://github.com/adrielmsft/aks-hyperscale-metadata-api/actions/workflows/ci.yml).
+A direct link to a successful run must be added here after this workflow is
+pushed and passes on GitHub; local test results alone do not satisfy that
+submission requirement. Extend E2E coverage as the remaining operations and
+production features are implemented.
 
 Commands above use Windows PowerShell paths. On Linux or macOS, use
 `src/MetadataApi` and `artifacts/TestResults` for the corresponding paths, and

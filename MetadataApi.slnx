@@ -3,6 +3,7 @@
     <Project Path="src/MetadataApi/MetadataApi.csproj" />
   </Folder>
   <Folder Name="/tests/">
+    <Project Path="tests/MetadataApi.E2E.Tests/MetadataApi.E2E.Tests.csproj" />
     <Project Path="tests/MetadataApi.Tests/MetadataApi.Tests.csproj" />
   </Folder>
 </Solution>

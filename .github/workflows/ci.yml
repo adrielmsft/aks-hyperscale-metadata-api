@@ -1,0 +1,82 @@
+name: Build, test, and HTTP E2E
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    env:
+      DOTNET_NOLOGO: 'true'
+      DOTNET_CLI_TELEMETRY_OPTOUT: 'true'
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up .NET SDK
+        uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+
+      - name: Restore tools and dependencies
+        run: |
+          dotnet tool restore
+          dotnet restore MetadataApi.slnx
+
+      - name: Build
+        run: dotnet build MetadataApi.slnx --configuration Release --no-restore
+
+      - name: Unit and SQLite integration tests with coverage
+        run: >-
+          dotnet test tests/MetadataApi.Tests/MetadataApi.Tests.csproj
+          --configuration Release --no-build
+          --collect:"XPlat Code Coverage"
+          --logger "trx;LogFileName=unit-integration.trx"
+          --results-directory artifacts/unit-integration
+
+      - name: Real HTTP E2E (migrate, start Kestrel, test, restart, clean up)
+        run: >-
+          dotnet test tests/MetadataApi.E2E.Tests/MetadataApi.E2E.Tests.csproj
+          --configuration Release --no-build
+          --logger "trx;LogFileName=e2e.trx"
+          --results-directory artifacts/e2e-results
+
+      - name: Report coverage
+        if: always()
+        shell: pwsh
+        run: |
+          if (-not (Test-Path artifacts/unit-integration)) {
+            throw "The unit/integration results directory was not generated."
+          }
+          $report = Get-ChildItem artifacts/unit-integration -Filter coverage.cobertura.xml -Recurse | Select-Object -First 1
+          if (-not $report) {
+            throw "The unit/integration coverage report was not generated."
+          }
+          [xml]$coverage = Get-Content -LiteralPath $report.FullName -Raw
+          $lines = [math]::Round(100 * [double]$coverage.coverage.'line-rate', 2)
+          $branches = [math]::Round(100 * [double]$coverage.coverage.'branch-rate', 2)
+          @"
+          ## Unit and integration coverage
+          | Metric | Coverage |
+          | --- | --- |
+          | Lines | $lines% |
+          | Branches | $branches% |
+          "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+
+      - name: Upload test results, coverage, and server logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: |
+            artifacts/unit-integration
+            artifacts/e2e-results
+            artifacts/e2e
+          if-no-files-found: warn
+          retention-days: 7
