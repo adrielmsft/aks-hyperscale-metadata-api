@@ -280,84 +280,93 @@ Errors use `application/problem+json` and Problem Details, with field-keyed `err
 | 405 Method Not Allowed | A route exists but does not support the HTTP method; include an Allow header. |
 | 415 Unsupported Media Type | A body-bearing resource POST or PUT request does not use a supported JSON content type. |
 | 500 Internal Server Error | Unexpected failure; return a generic message and log details server-side without credentials. |
+| 503 Service Unavailable | Database lock contention exceeded the bounded wait; the write did not succeed. |
 
 ## Storage Layer
 
-### Initial choice: SQLite with EF Core
-
-Use SQLite, an embedded relational database, with Entity Framework Core for data access and schema migrations. SQLite runs inside the API process and persists data in a local file; no separate database service is required. EF Core maps the C# entities to tables and translates LINQ queries into SQL.
-
-This fits the single-instance scope and keeps local execution and CI setup simple while providing transactions, indexes, and database-enforced relationships. A separate PostgreSQL or SQL Server deployment remains a future option, not an initial requirement.
-
-### Separation of responsibilities
+Use **file-backed SQLite with EF Core**, targeting one API instance on one machine. This provides relational constraints and transactions without a separate database service. Prioritize correctness, consistency, and durable commits over write throughput.
 
 ```text
 API endpoints -> Application services -> EF Core DbContext -> SQLite file
 ```
 
-- Endpoints handle HTTP concerns and request/response DTOs.
-- Application services coordinate resource operations, association rules, and transaction boundaries without depending on HTTP response types.
-- The DbContext and entity configuration own queries, mappings, keys, constraints, and indexes.
-- Avoid a generic repository wrapper unless implementation reveals a concrete need; EF Core already provides change tracking and a unit of work.
+Endpoints own HTTP concerns; services coordinate workflows and transactions; persistence code owns EF Core queries and mappings. No additional generic repository is needed.
 
-### Schema and integrity
+### Integrity and configuration
 
-| Table | Key and constraints |
-| --- | --- |
-| Applications | Server-generated GUID primary key; required Title. |
-| Maintainers | Server-generated GUID primary key; required Name and Email. |
-| ApplicationMaintainers | Composite primary key `(ApplicationId, MaintainerId)`; foreign keys to both parent tables. |
+- Use GUID primary keys on Applications and Maintainers. Use a composite primary key `(ApplicationId, MaintainerId)` and foreign keys on ApplicationMaintainers; cascade deletion to association rows only. Add an index on MaintainerId for reverse lookups.
+- Enable `foreign_keys=ON` and `synchronous=FULL` on every connection. Initialize and verify `journal_mode=WAL` before serving requests. Fail startup explicitly if required settings cannot be established.
+- WAL permits readers alongside a writer; FULL synchronizes the WAL at each commit to favor power-loss durability, subject to the filesystem and hardware honoring synchronization.
+- Make related changes atomic using transactions. A single EF Core SaveChanges call is transactional; use an explicit transaction for workflows spanning multiple saves. Keep transactions short.
+- Validate field rules before persistence; SQLite does not automatically enforce declared string length limits.
+- Configure a five-second database lock-wait timeout, with no unbounded application retries. Return Problem Details with 503 when lock contention exhausts the wait; roll back failed transactions and never report a failed write as successful.
+- Updates retain the current last-write-wins contract. Transaction integrity does not prevent stale clients from overwriting newer values; optimistic concurrency remains a separate potential feature.
 
-- Explicitly enable SQLite foreign-key enforcement on connections.
-- Cascade parent deletion to association rows only; never delete the resources on the other side.
-- Add an index starting with MaintainerId for reverse relationship queries; the composite primary key supports queries starting with ApplicationId.
-- Enforce field validation in the application. SQLite does not enforce declared string maximum lengths automatically.
+### Persistence and lifecycle
 
-### Consistency and durability
+- Use a configurable, stable database path on persistent local storage. Reopen the same file after restart; never delete or recreate it during normal startup. Exclude database, WAL, and shared-memory files from Git.
+- Apply versioned EF Core migrations through a documented command before starting the server, both locally and in CI. Use isolated temporary databases for tests.
+- Persistence is not a backup. Document a SQLite-supported backup procedure rather than copying only the main file while WAL is active; automated backup infrastructure is out of scope.
 
-- Use transactions for operations that must succeed or fail together. A single EF Core SaveChanges call is transactional; workflows spanning multiple saves may require an explicit transaction.
-- Database constraints, not just existence checks, protect against duplicate links and invalid references under concurrent requests.
-- Data persists across API restarts when the database file is retained. Deployment requires a persistent, writable local disk; an ephemeral container filesystem is insufficient.
-- Crash and power-loss durability depend on SQLite journal/synchronization settings and the underlying storage. Document the selected settings rather than assuming every configuration has identical guarantees.
-- Persistence is not a backup. A future backup procedure must account for active transactions and any WAL files; copying only a live main database file is not a safe general strategy.
+### Limits and verification
 
-### Concurrency and scaling
+SQLite allows one writer at a time. Use indexed queries and bounded database-side pagination; distributed operation and shared database files on network storage are out of scope. If write contention or multiple API replicas become requirements, migrate to PostgreSQL or SQL Server with provider-specific migrations, data transfer, and regression testing.
 
-- SQLite serializes writes: only one writer can hold the write transaction at a time. Keep transactions short and avoid external calls inside them.
-- WAL mode is a candidate for allowing readers alongside a writer; it does not enable multiple simultaneous writers.
-- Use database-side bounded pagination and indexes rather than loading entire collections into memory.
-- Configure a bounded wait for database locks and define an explicit failure response when contention exceeds it; do not retry indefinitely or hide failures.
-- The initial target is a single API instance on one machine. Shared-file access over a network filesystem and horizontal scaling are not part of this design.
-- If write contention or multiple API replicas become requirements, migrate to a shared server database. Retain the resource model and service boundaries, but create provider-specific migrations, transfer and verify data, and retest query and concurrency behavior.
-
-### Decisions to finalize
-
-The points below are intentionally open for implementation planning:
-
-- **Journal and durability settings:** use WAL or the default rollback journal? What synchronization setting matches the desired crash-durability guarantee?
-- **Contention policy:** how long should requests wait for a database lock, and should exhausted contention return a documented 503 response?
-- **Migration workflow:** apply migrations through a documented command or automatically at startup? Keep local and CI behavior reproducible.
-- **Database location:** choose a configurable path and define how local development and tests obtain separate databases.
-- **Concurrent updates:** retain the current last-write-wins contract or add optimistic concurrency as a deliberate production feature?
-- **Recovery scope:** document backup/restore guidance only, or demonstrate a small recovery test if time permits?
-
-Storage tests should use real SQLite, including foreign-key enforcement, unique association pairs, cascading link deletion, transactional rollback, and persistence after reopening a file-backed database.
+Test against real SQLite: verify configured settings, foreign keys, duplicate-link prevention, cascading link deletion, rollback on failure, bounded lock contention, and persistence across server restart.
 
 ## Production Readiness
-- Monitoring, telemetry, alerting **(is there a centralized solution like datadog for this I can easily hookup?)**
-- Auth (for maintainer + app access). Build an extendable layer for this?
-- API spec (OPEN API link)
-- Version control (model after how our service does it with attribute tags)
-- Retries, throttling, timeouts, exception handling
-- **What is OOM?, is this a major concern?**
-- **What wmight optimistic concurrency look like in this application?**
-- **TODO brainstorm more production readiness features**
+
+- **Standout feature: observability.** Use structured logging and OpenTelemetry for request traces and metrics (request count, duration, active requests, and rate-limit rejections). Support optional OTLP export to an external collector without requiring a dashboard or backend to run the API. Correlate logs with trace IDs and demonstrate export with a collector smoke test; highlight this feature in the README.
+- **Telemetry safeguards:** never record API keys, request bodies, or maintainer emails. Use route templates rather than resource IDs as metric labels. Bound telemetry queues; exporter failures must not fail API requests, and diagnostic reporting must not leak credentials.
+- **Authentication:** require the configured shared API key on resource endpoints. Store it outside source control; missing or invalid credentials return 401. Authenticated clients have administrative access, not per-maintainer permissions. Require HTTPS when publicly deployed.
+- **API contract:** use `/api/v1` for explicit contract versioning and publish an OpenAPI specification. Supporting multiple API versions is out of scope.
+- **Failure handling:** use centralized exception handling with generic Problem Details responses and server-side diagnostics correlated by trace ID. Keep expected validation and not-found responses distinct from unexpected failures; never expose stack traces or database details to clients.
+- **Contention and retries:** retain the bounded database lock wait and 503 response defined above. Do not add blanket write retries: replaying POST can create duplicates. Transactions and SQLite synchronization settings provide durability, not retries.
+- **Throttling:** use ASP.NET Core's built-in rate limiter with a configurable, documented global request limit and no queue. Return 429 Problem Details and `Retry-After` when available. This protects the single instance but does not provide per-user fairness.
+- **OOM prevention:** cap request-body size before JSON deserialization, return 413 for oversized bodies, and retain bounded database-side pagination and telemetry buffering. These reduce memory-exhaustion risk; catching OutOfMemoryException is not a recovery strategy.
+- **Explicit exclusions:** no dashboard, alerting infrastructure, distributed rate limiting, or optimistic concurrency in the initial scope. Updates use last-write-wins: stale PUT requests can overwrite newer metadata. Database transactions protect integrity but do not prevent lost updates.
 
 ## Testing
-- Unit tests
-- Synthetic tests making calls against the real API **(Github Actions pipeline?)** 
 
-**TODO any other KEY design decisions to consider?**
+Use **xUnit** for all test suites, `dotnet test` as the runner entry point, and **GitHub Actions** for CI. Use built-in xUnit assertions and HttpClient; add mocking libraries only if a concrete need arises.
+
+### Unit tests
+
+- Test field validation and normalization, optional/null handling, length boundaries, semantic versions, URL rules, and pagination parameters.
+- Keep these tests independent of HTTP hosting, database files, and external services.
+- Collect coverage using Coverlet with a compatible .NET test runner configuration. Publish unit-test coverage in the CI summary and upload the report; no minimum threshold is required.
+
+### Storage integration tests
+
+- Exercise EF Core against real SQLite, not EF Core's InMemory provider.
+- Use isolated temporary file-backed databases and the same migrations and connection configuration as the API.
+- Verify foreign keys, unique association pairs, cascading link deletion, transactional rollback, configured SQLite settings, bounded lock waits, and persistence after reopening the database.
+- Clean up database connections and temporary files after each test fixture. Explicitly control parallel execution for contention tests.
+
+### E2E tests
+
+- Start the built API as a separate process on localhost with a temporary database and test-only API key. Use HttpClient to test real HTTP requests without mocking the server or storage.
+- Cover CRUD for both resources, association creation/removal and repeated PUT, deletion integrity, pagination, validation errors, authentication, body-size limits, and rate limiting.
+- Verify status codes, response shapes, Location headers, and Problem Details, not just successful responses. Restart the API against the same database to verify persistence.
+- Include a focused smoke test against a local OpenTelemetry collector to verify exported telemetry and trace correlation, without requiring a cloud account or dashboard.
+- Isolate test resources and serialize scenarios that share server-wide state, such as rate-limit tests. Use readiness checks and bounded waits rather than fixed startup sleeps.
+
+### GitHub Actions pipeline
+
+Run on pushes and pull requests:
+
+```text
+Restore -> Build -> Unit/storage tests + coverage
+        -> Apply migrations -> Start API and local telemetry collector
+        -> Wait for readiness -> E2E tests
+        -> Publish results and clean up
+```
+
+- Pin the .NET SDK version and document commands for running the same suites locally.
+- Generate an ephemeral API key for CI, mask it in logs, and never commit it. No production credentials are required.
+- Fail the pipeline on build or test failures. Upload test results, coverage, and sanitized diagnostic logs, including on failure; always stop started processes and clean up temporary databases.
+- Before submission, ensure at least one successful E2E workflow run is publicly visible and link directly to that run from the README.
+
 
 
     
