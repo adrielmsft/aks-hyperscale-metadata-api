@@ -158,6 +158,82 @@ public sealed class ApplicationValidationTests
             field => Assert.Contains(field, errors));
     }
 
+    [Fact]
+    public void Update_NormalizesEveryFieldUsingCreateRules()
+    {
+        var request = ApplicationValidation.Normalize(new UpdateApplicationRequest
+        {
+            Title = " Microsoft Garage ", Version = " 1.2.3-rc.1+build.7 ",
+            Company = " Microsoft ", Website = " https://garage.example.com ",
+            Source = " https://github.com/example/garage ", License = " Apache-2.0 ",
+            Description = " Garage locations\n\tGarage staff "
+        });
+
+        Assert.Empty(ApplicationValidation.Validate(request));
+        Assert.Equal("Microsoft Garage", request.Title);
+        Assert.Equal("1.2.3-rc.1+build.7", request.Version);
+        Assert.Equal("Microsoft", request.Company);
+        Assert.Equal("https://garage.example.com", request.Website);
+        Assert.Equal("https://github.com/example/garage", request.Source);
+        Assert.Equal("Apache-2.0", request.License);
+        Assert.Equal("Garage locations\n\tGarage staff", request.Description);
+        var blank = ApplicationValidation.Normalize(request with
+        {
+            Version = " ", Company = "", Website = "\t", Source = "\n", License = " ", Description = " \r\n "
+        });
+        Assert.Equal(new UpdateApplicationRequest { Title = "Microsoft Garage" }, blank);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData(" \t\r\n ")]
+    public void Update_TitleIsRequired(string? title)
+        => Assert.Contains("title", ApplicationValidation.Validate(
+            ApplicationValidation.Normalize(new UpdateApplicationRequest { Title = title })));
+
+    [Theory]
+    [InlineData("title", 200)]
+    [InlineData("version", 100)]
+    [InlineData("company", 200)]
+    [InlineData("website", 2048)]
+    [InlineData("source", 2048)]
+    [InlineData("license", 100)]
+    [InlineData("description", 4000)]
+    public void Update_UsesCreateLengthAndControlCharacterRules(string field, int maximum)
+    {
+        var prefix = field switch
+        {
+            "version" => "1.2.3+",
+            "website" or "source" => "https://garage.example.com/",
+            _ => ""
+        };
+        var value = prefix + new string('a', maximum - prefix.Length);
+        Assert.Empty(ApplicationValidation.Validate(ApplicationValidation.Normalize(
+            ToUpdate(WithField(field, $" {value} ")))));
+        Assert.Contains(field, ApplicationValidation.Validate(ToUpdate(WithField(field, value + "a"))));
+        Assert.Contains(field, ApplicationValidation.Validate(ToUpdate(WithField(field, "Garage\0Staff"))));
+    }
+
+    [Theory]
+    [InlineData("version", "v1.2.3")]
+    [InlineData("version", "1.2")]
+    [InlineData("version", "01.2.3")]
+    [InlineData("version", "1.0.0-01")]
+    [InlineData("website", "ftp://garage.example.com")]
+    [InlineData("website", "https://user:password@garage.example.com")]
+    [InlineData("source", "/garage")]
+    [InlineData("source", "https://")]
+    public void Update_RejectsInvalidVersionsAndUrls(string field, string value)
+        => Assert.Contains(field, ApplicationValidation.Validate(ToUpdate(WithField(field, value))));
+
+    private static UpdateApplicationRequest ToUpdate(CreateApplicationRequest request) => new()
+    {
+        Title = request.Title, Version = request.Version, Company = request.Company,
+        Website = request.Website, Source = request.Source, License = request.License,
+        Description = request.Description
+    };
+
     private static CreateApplicationRequest WithField(string field, string? value)
     {
         var request = new CreateApplicationRequest { Title = "Portal" };

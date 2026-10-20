@@ -5,6 +5,35 @@ namespace MetadataApi.Validation;
 
 public static partial class ApplicationValidation
 {
+    public static UpdateApplicationRequest Normalize(UpdateApplicationRequest request)
+    {
+        var normalized = Normalize(ToCreateRequest(request));
+        return request with
+        {
+            Title = normalized.Title,
+            Version = normalized.Version,
+            Company = normalized.Company,
+            Website = normalized.Website,
+            Source = normalized.Source,
+            License = normalized.License,
+            Description = normalized.Description
+        };
+    }
+
+    public static Dictionary<string, string[]> Validate(UpdateApplicationRequest request)
+        => Validate(ToCreateRequest(request));
+
+    private static CreateApplicationRequest ToCreateRequest(UpdateApplicationRequest request) => new()
+    {
+        Title = request.Title,
+        Version = request.Version,
+        Company = request.Company,
+        Website = request.Website,
+        Source = request.Source,
+        License = request.License,
+        Description = request.Description
+    };
+
     public static CreateApplicationRequest Normalize(CreateApplicationRequest request) => request with
     {
         Title = Trim(request.Title),

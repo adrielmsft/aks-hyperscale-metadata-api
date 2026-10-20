@@ -5,12 +5,10 @@ An ASP.NET Core API for application and maintainer metadata. See the
 
 ## Current status
 
-The first Application slice supports creating and retrieving metadata backed by
-SQLite and EF Core. The schema also includes Maintainers and their associations.
-Liveness, development OpenAPI, input validation, and Problem Details are available.
-Updates, deletion, listing, Maintainer/association endpoints, authentication,
-and telemetry are not implemented yet. GitHub Actions builds the solution,
-reports coverage, and runs separate-process HTTP E2E tests for the implemented API.
+The API manages application and maintainer metadata using SQLite and EF Core.
+See the API reference below for currently implemented operations. Liveness,
+OpenAPI, input validation, Problem Details, and real HTTP CI tests are available.
+Authentication and telemetry are not implemented yet.
 
 ## Prerequisites
 
@@ -57,13 +55,19 @@ server bound to localhost and do not expose it publicly.
 | Method | Path | Success |
 | --- | --- | --- |
 | POST | `/api/v1/applications` | 201 with the created resource and a Location header |
+| GET | `/api/v1/applications?limit=20&offset=0` | 200 with a bounded page of resources |
 | GET | `/api/v1/applications/{applicationId}` | 200 with the stored resource |
+| PUT | `/api/v1/applications/{applicationId}` | 200 with fully replaced metadata |
+| DELETE | `/api/v1/applications/{applicationId}` | 204 with no body |
 
 Create and fetch an application from PowerShell:
 
 ```powershell
 $application = Invoke-RestMethod -Method Post -Uri http://localhost:5108/api/v1/applications -ContentType application/json -Body '{"title":"Inventory Portal","version":"1.2.0"}'
 Invoke-RestMethod -Uri "http://localhost:5108/api/v1/applications/$($application.id)"
+Invoke-RestMethod -Uri "http://localhost:5108/api/v1/applications?limit=20&offset=0"
+Invoke-RestMethod -Method Put -Uri "http://localhost:5108/api/v1/applications/$($application.id)" -ContentType application/json -Body '{"title":"Microsoft Garage","version":"2.0.0"}'
+Invoke-RestMethod -Method Delete -Uri "http://localhost:5108/api/v1/applications/$($application.id)"
 ```
 
 Example create response (the server generates the ID):
@@ -87,6 +91,31 @@ Website and Source must be absolute HTTP(S) URLs without embedded credentials;
 the API never fetches them. Names/titles are not unique: repeated POST requests
 create distinct resources. Creation does not add maintainer associations.
 
+PUT is a full replacement, not a partial update: Title is required and omitted
+optional fields become null. The ID and existing maintainer links do not change.
+A missing application is not created. Updates use last-write-wins, with no ETag
+or optimistic concurrency check. DELETE removes the application and its links
+only, never its maintainers or other applications. Repeat deletion returns 404.
+
+Collection GET defaults to `limit=20` and `offset=0`. Limit must be an integer
+from 1 through 100 and offset an integer from 0 through 10,000; invalid values
+return 400, not clamped results. Results are ordered by ID ascending in SQLite.
+The API fetches at most `limit + 1` rows and returns an envelope:
+
+```json
+{
+  "items": [],
+  "limit": 20,
+  "offset": 0,
+  "nextOffset": null
+}
+```
+
+`items` contains Application representations (including explicit null optional
+fields). `nextOffset` is `offset + limit` only if more rows exist and that offset
+is at most 10,000; otherwise it is null. Empty and out-of-data pages have
+`items: []`. Pagination is not a snapshot: concurrent writes may shift results.
+
 JSON uses exact camelCase property names. Unknown properties (including a supplied
 `id`), duplicate properties, and incorrect value types are rejected. See the
 [validation scheme](aks-metadata-api-design.md#data-model-input-validation)
@@ -94,11 +123,11 @@ for field limits.
 
 Errors use `application/problem+json`:
 
-- **400:** malformed JSON, invalid fields, or invalid/empty GUIDs. Metadata and
+- **400:** malformed JSON, invalid fields or pagination, or invalid/empty GUIDs. Metadata and
   ID validation errors include a field-keyed `errors` object.
 - **404:** a valid application ID does not exist.
-- **415:** the POST body does not use a supported JSON content type.
-- **503:** database lock contention exhausted the bounded wait; no resource was created.
+- **415:** the POST or PUT body does not use a supported JSON content type.
+- **503:** database lock contention exhausted the bounded wait; the write did not succeed.
 - **500:** an unexpected failure, without internal exception details.
 
 Use the Development OpenAPI document for operation schemas and
@@ -156,11 +185,14 @@ The unit/integration xUnit project contains:
 - In-process API smoke tests using `WebApplicationFactory`: liveness, OpenAPI
   availability in Development and its absence in Production, and Problem Details
   for missing routes.
-- Application HTTP tests against real SQLite: create/read behavior, Location
-  headers, null fields, invalid input, missing resources, OpenAPI metadata, and
-  503 responses during database contention.
+- Application HTTP tests against real SQLite: complete CRUD, Location headers,
+  replacement/null clearing, unchanged identity and associations, link-only
+  cascade deletion, pagination ordering/defaults/bounds/traversal cap, invalid
+  input, missing resources, OpenAPI metadata, generic 500 errors, and unchanged
+  storage after 503 responses during database contention.
 - Unit tests for Application normalization and validation, including exact length
-  boundaries, SemVer syntax, URL rules, and control characters.
+  boundaries, SemVer syntax, URL rules, and control characters for create and
+  replacement; pagination boundaries/next offsets and service cancellation.
 - Real SQLite integration tests: migrations, connection settings, persistence
   after reopening, foreign keys, duplicate links, cascading deletion, rollback,
   bounded lock contention, and startup rejection of pending migrations.
@@ -173,9 +205,10 @@ real child process running Kestrel in Production mode, applies migrations to its
 own temporary SQLite database, and sends requests over a real loopback TCP port.
 It does not use `WebApplicationFactory`, mock storage, or shared API DTOs.
 
-E2E checks cover create/read behavior, Location headers, normalized metadata,
-explicit nulls, duplicate titles, validation and JSON errors, 404/415 responses,
-and persistence across an API process restart. Kestrel chooses a free port;
+E2E checks cover complete Application CRUD, Location headers, normalized metadata,
+full replacement and explicit null clearing, duplicate titles, paginated listing,
+validation and JSON errors, 404/415 responses, and persistence of creation,
+replacement, and deletion across API process restarts. Kestrel chooses a free port;
 startup waits for its listening signal and verifies liveness rather than sleeping
 for a fixed duration. Startup is bounded, test HTTP calls have timeouts, and the
 fixture stops its own processes and deletes its temporary database on completion.

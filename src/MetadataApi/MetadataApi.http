@@ -27,6 +27,65 @@ Content-Type: application/json
 GET {{MetadataApi_HostAddress}}/api/v1/applications/{{createApplication.response.body.$.id}}
 Accept: application/json
 
+### List applications (defaults: limit 20, offset 0; ID ascending)
+GET {{MetadataApi_HostAddress}}/api/v1/applications
+Accept: application/json
+
+### Explicit page; follow nextOffset while it is not null
+GET {{MetadataApi_HostAddress}}/api/v1/applications?limit=10&offset=0
+Accept: application/json
+
+### Replace all metadata; omitted optional fields are cleared
+PUT {{MetadataApi_HostAddress}}/api/v1/applications/{{createApplication.response.body.$.id}}
+Content-Type: application/json
+
+{
+  "title": "Microsoft Garage",
+  "version": "2.0.0",
+  "description": "Garage locations and staff."
+}
+
+### Delete application and association links only (never maintainers)
+DELETE {{MetadataApi_HostAddress}}/api/v1/applications/{{createApplication.response.body.$.id}}
+
+### Missing replacement target: 404 (PUT does not create)
+PUT {{MetadataApi_HostAddress}}/api/v1/applications/ffffffff-ffff-ffff-ffff-ffffffffffff
+Content-Type: application/json
+
+{
+  "title": "Microsoft Garage"
+}
+
+### Missing deletion target: 404 (including repeat deletion)
+DELETE {{MetadataApi_HostAddress}}/api/v1/applications/ffffffff-ffff-ffff-ffff-ffffffffffff
+
+### Invalid pagination: 400 (not silently clamped)
+GET {{MetadataApi_HostAddress}}/api/v1/applications?limit=101&offset=-1
+Accept: application/json
+
+### Invalid replacement: 400 (Title is required)
+PUT {{MetadataApi_HostAddress}}/api/v1/applications/{{createApplication.response.body.$.id}}
+Content-Type: application/json
+
+{
+  "version": "2.0.0"
+}
+
+### ID is immutable: 400 (unknown request property)
+PUT {{MetadataApi_HostAddress}}/api/v1/applications/{{createApplication.response.body.$.id}}
+Content-Type: application/json
+
+{
+  "id": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+  "title": "Microsoft Garage"
+}
+
+### Unsupported replacement media type: 415
+PUT {{MetadataApi_HostAddress}}/api/v1/applications/{{createApplication.response.body.$.id}}
+Content-Type: text/plain
+
+Microsoft Garage
+
 ### Missing application: 404 Problem Details
 GET {{MetadataApi_HostAddress}}/api/v1/applications/ffffffff-ffff-ffff-ffff-ffffffffffff
 Accept: application/json
