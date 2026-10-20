@@ -80,6 +80,36 @@ public sealed class ObservabilityTests
     }
 
     [Fact]
+    public async Task RateLimitRejection_ExportsLimiterMetricsWithoutApiKey()
+    {
+        var metrics = new List<Metric>();
+        using var baseline = new MetadataApiFactory(new Dictionary<string, string>
+        {
+            ["RateLimiting:PermitLimit"] = "1", ["RateLimiting:WindowSeconds"] = "3600"
+        });
+        using var factory = baseline.WithWebHostBuilder(builder => builder.ConfigureTestServices(services =>
+            services.AddOpenTelemetry().WithMetrics(meter => meter.AddInMemoryExporter(metrics))));
+        using var client = factory.CreateClient();
+        using var allowed = await client.GetAsync("/api/v1/applications");
+        Assert.Equal(HttpStatusCode.OK, allowed.StatusCode);
+        using var rejected = await client.GetAsync("/api/v1/applications");
+        Assert.Equal(HttpStatusCode.TooManyRequests, rejected.StatusCode);
+        factory.Services.GetRequiredService<MeterProvider>().ForceFlush();
+        Assert.Contains(metrics, metric => metric.Name == "aspnetcore.rate_limiting.requests");
+        foreach (var metric in metrics)
+        {
+            foreach (ref readonly var point in metric.GetMetricPoints())
+            {
+                foreach (var tag in point.Tags)
+                {
+                    Assert.DoesNotContain("Authorization", tag.Key, StringComparison.OrdinalIgnoreCase);
+                    Assert.DoesNotContain(MetadataApiFactory.ApiKey, tag.Value?.ToString() ?? "");
+                }
+            }
+        }
+    }
+
+    [Fact]
     public async Task HealthRequest_IsNotTraced()
     {
         var spans = new List<Activity>();
