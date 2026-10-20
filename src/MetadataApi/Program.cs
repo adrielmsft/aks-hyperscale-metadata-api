@@ -3,6 +3,7 @@ using MetadataApi.Authentication;
 using MetadataApi.Endpoints;
 using MetadataApi.Middleware;
 using MetadataApi.Persistence;
+using MetadataApi.Reliability;
 using MetadataApi.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -15,7 +16,7 @@ builder.Services.AddApiKeyAuthentication(builder.Configuration);
 builder.Services.AddOpenApi();
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<DatabaseExceptionHandler>();
-builder.Services.AddHealthChecks();
+builder.AddReliability();
 builder.Services.AddScoped<IApplicationService, ApplicationService>();
 builder.Services.AddScoped<IMaintainerService, MaintainerService>();
 builder.Services.ConfigureHttpJsonOptions(options =>
@@ -37,6 +38,7 @@ await using (var scope = app.Services.CreateAsyncScope())
 
 app.UseExceptionHandler();
 app.UseStatusCodePages();
+app.UseReliability();
 app.UseAuthentication();
 app.UseAuthorization();
 
@@ -45,7 +47,6 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi().AllowAnonymous();
 }
 
-app.MapHealthChecks("/health/live").AllowAnonymous();
 app.MapApplications();
 app.MapMaintainers();
 
