@@ -282,8 +282,66 @@ Errors use `application/problem+json` and Problem Details, with field-keyed `err
 | 500 Internal Server Error | Unexpected failure; return a generic message and log details server-side without credentials. |
 
 ## Storage Layer
-For scalability and built-in production readiness, an externally hosted database is what we will be using for this. 
-**investigate options with AI, such as what is embedded DB?, what meets the scale requirements for this API? it's not a particularly complex datamodel...**
+
+### Initial choice: SQLite with EF Core
+
+Use SQLite, an embedded relational database, with Entity Framework Core for data access and schema migrations. SQLite runs inside the API process and persists data in a local file; no separate database service is required. EF Core maps the C# entities to tables and translates LINQ queries into SQL.
+
+This fits the single-instance scope and keeps local execution and CI setup simple while providing transactions, indexes, and database-enforced relationships. A separate PostgreSQL or SQL Server deployment remains a future option, not an initial requirement.
+
+### Separation of responsibilities
+
+```text
+API endpoints -> Application services -> EF Core DbContext -> SQLite file
+```
+
+- Endpoints handle HTTP concerns and request/response DTOs.
+- Application services coordinate resource operations, association rules, and transaction boundaries without depending on HTTP response types.
+- The DbContext and entity configuration own queries, mappings, keys, constraints, and indexes.
+- Avoid a generic repository wrapper unless implementation reveals a concrete need; EF Core already provides change tracking and a unit of work.
+
+### Schema and integrity
+
+| Table | Key and constraints |
+| --- | --- |
+| Applications | Server-generated GUID primary key; required Title. |
+| Maintainers | Server-generated GUID primary key; required Name and Email. |
+| ApplicationMaintainers | Composite primary key `(ApplicationId, MaintainerId)`; foreign keys to both parent tables. |
+
+- Explicitly enable SQLite foreign-key enforcement on connections.
+- Cascade parent deletion to association rows only; never delete the resources on the other side.
+- Add an index starting with MaintainerId for reverse relationship queries; the composite primary key supports queries starting with ApplicationId.
+- Enforce field validation in the application. SQLite does not enforce declared string maximum lengths automatically.
+
+### Consistency and durability
+
+- Use transactions for operations that must succeed or fail together. A single EF Core SaveChanges call is transactional; workflows spanning multiple saves may require an explicit transaction.
+- Database constraints, not just existence checks, protect against duplicate links and invalid references under concurrent requests.
+- Data persists across API restarts when the database file is retained. Deployment requires a persistent, writable local disk; an ephemeral container filesystem is insufficient.
+- Crash and power-loss durability depend on SQLite journal/synchronization settings and the underlying storage. Document the selected settings rather than assuming every configuration has identical guarantees.
+- Persistence is not a backup. A future backup procedure must account for active transactions and any WAL files; copying only a live main database file is not a safe general strategy.
+
+### Concurrency and scaling
+
+- SQLite serializes writes: only one writer can hold the write transaction at a time. Keep transactions short and avoid external calls inside them.
+- WAL mode is a candidate for allowing readers alongside a writer; it does not enable multiple simultaneous writers.
+- Use database-side bounded pagination and indexes rather than loading entire collections into memory.
+- Configure a bounded wait for database locks and define an explicit failure response when contention exceeds it; do not retry indefinitely or hide failures.
+- The initial target is a single API instance on one machine. Shared-file access over a network filesystem and horizontal scaling are not part of this design.
+- If write contention or multiple API replicas become requirements, migrate to a shared server database. Retain the resource model and service boundaries, but create provider-specific migrations, transfer and verify data, and retest query and concurrency behavior.
+
+### Decisions to finalize
+
+The points below are intentionally open for implementation planning:
+
+- **Journal and durability settings:** use WAL or the default rollback journal? What synchronization setting matches the desired crash-durability guarantee?
+- **Contention policy:** how long should requests wait for a database lock, and should exhausted contention return a documented 503 response?
+- **Migration workflow:** apply migrations through a documented command or automatically at startup? Keep local and CI behavior reproducible.
+- **Database location:** choose a configurable path and define how local development and tests obtain separate databases.
+- **Concurrent updates:** retain the current last-write-wins contract or add optimistic concurrency as a deliberate production feature?
+- **Recovery scope:** document backup/restore guidance only, or demonstrate a small recovery test if time permits?
+
+Storage tests should use real SQLite, including foreign-key enforcement, unique association pairs, cascading link deletion, transactional rollback, and persistence after reopening a file-backed database.
 
 ## Production Readiness
 - Monitoring, telemetry, alerting **(is there a centralized solution like datadog for this I can easily hookup?)**
