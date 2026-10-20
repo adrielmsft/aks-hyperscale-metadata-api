@@ -1,4 +1,6 @@
 using System.Diagnostics;
+using System.Net.Http.Headers;
+using System.Security.Cryptography;
 using System.Reflection;
 
 namespace MetadataApi.E2E.Tests;
@@ -11,8 +13,10 @@ public sealed class ApiServerFixture : IAsyncLifetime
     private readonly string configuration = typeof(ApiServerFixture).Assembly
         .GetCustomAttribute<AssemblyConfigurationAttribute>()?.Configuration
         ?? throw new InvalidOperationException("The test build configuration is missing.");
+    private readonly string apiKey = Environment.GetEnvironmentVariable("Authentication__ApiKey")
+        ?? Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
     private readonly string databaseDirectory = Path.Combine(
-        Path.GetTempPath(), $"metadata-api-e2e-{Guid.NewGuid():N}");
+        FindRepositoryRoot(), "artifacts", "databases", $"metadata-api-e2e-{Guid.NewGuid():N}");
     private readonly string runId = Guid.NewGuid().ToString("N");
     private Process? server;
     private TextWriter? serverLog;
@@ -21,6 +25,12 @@ public sealed class ApiServerFixture : IAsyncLifetime
 
     public HttpClient Client => client
         ?? throw new InvalidOperationException("The E2E server has not started.");
+
+    public HttpClient CreateUnauthenticatedClient() => new()
+    {
+        BaseAddress = Client.BaseAddress,
+        Timeout = Client.Timeout
+    };
 
     private string LogDirectory => Path.Combine(root, "artifacts", "e2e", runId);
 
@@ -57,6 +67,39 @@ public sealed class ApiServerFixture : IAsyncLifetime
     {
         await StopServerAsync();
         await StartServerAsync();
+    }
+
+    public async Task<(int ExitCode, string Output)> StartWithoutApiKeyAsync()
+    {
+        var applicationDirectory = Path.Combine(root, "src", "MetadataApi");
+        var assemblyPath = Path.Combine(
+            applicationDirectory, "bin", configuration, "net10.0", "MetadataApi.dll");
+        using var process = new Process
+        {
+            StartInfo = CreateStartInfo(assemblyPath, "--contentRoot", applicationDirectory,
+                "--urls", "http://127.0.0.1:0", "--Authentication:ApiKey=")
+        };
+        process.StartInfo.Environment.Remove("Authentication__ApiKey");
+        process.Start();
+        var output = process.StandardOutput.ReadToEndAsync();
+        var errors = process.StandardError.ReadToEndAsync();
+        try
+        {
+            await process.WaitForExitAsync().WaitAsync(TimeSpan.FromSeconds(30));
+        }
+        finally
+        {
+            if (!process.HasExited)
+            {
+                process.Kill(entireProcessTree: true);
+                await process.WaitForExitAsync();
+            }
+
+            await File.WriteAllTextAsync(Path.Combine(LogDirectory, "missing-key.log"),
+                await output + await errors);
+        }
+
+        return (process.ExitCode, await output + await errors);
     }
 
     private async Task ApplyMigrationsAsync()
@@ -148,6 +191,7 @@ public sealed class ApiServerFixture : IAsyncLifetime
         // Port zero lets Kestrel select a free port without racing another process.
         var baseAddress = await listening.Task.WaitAsync(TimeSpan.FromSeconds(30));
         client = new HttpClient { BaseAddress = baseAddress, Timeout = TimeSpan.FromSeconds(15) };
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         using var readiness = await client.GetAsync("/health/live");
         readiness.EnsureSuccessStatusCode();
     }
@@ -167,6 +211,7 @@ public sealed class ApiServerFixture : IAsyncLifetime
         }
 
         info.Environment["Database__Path"] = Path.Combine(databaseDirectory, "metadata.db");
+        info.Environment["Authentication__ApiKey"] = apiKey;
         info.Environment["ASPNETCORE_ENVIRONMENT"] = "Production";
         info.Environment["DOTNET_ENVIRONMENT"] = "Production";
         info.Environment["Logging__LogLevel__Default"] = "Warning";
