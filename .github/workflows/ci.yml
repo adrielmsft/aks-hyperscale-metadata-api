@@ -48,14 +48,41 @@ jobs:
           echo "::add-mask::$key"
           echo "key=$key" >> "$GITHUB_OUTPUT"
 
+      - name: Start OpenTelemetry collector
+        run: |
+          mkdir -p artifacts/otel
+          chmod 777 artifacts/otel
+          docker run -d --name metadata-otel --memory 128m \
+            -p 127.0.0.1:4317:4317 \
+            -v "$PWD/.github/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro" \
+            -v "$PWD/artifacts/otel:/data" \
+            otel/opentelemetry-collector-contrib:0.147.0
+          for attempt in $(seq 1 30); do
+            # gRPC is HTTP/2-only; TCP availability is sufficient here. The E2E verifies delivery.
+            if (echo > /dev/tcp/127.0.0.1/4317) 2>/dev/null; then break; fi
+            sleep 1
+          done
+          (echo > /dev/tcp/127.0.0.1/4317) 2>/dev/null
+          test "$(docker inspect -f '{{.State.Running}}' metadata-otel)" = true
+
       - name: Real HTTP E2E (migrate, start Kestrel, test, restart, clean up)
         env:
           Authentication__ApiKey: ${{ steps.api-key.outputs.key }}
+          OTEL_SMOKE_EXPORT_FILE: ${{ github.workspace }}/artifacts/otel/telemetry.json
+          OTEL_SMOKE_ENDPOINT: http://127.0.0.1:4317
         run: >-
           dotnet test tests/MetadataApi.E2E.Tests/MetadataApi.E2E.Tests.csproj
           --configuration Release --no-build
           --logger "trx;LogFileName=e2e.trx"
           --results-directory artifacts/e2e-results
+
+      - name: Stop OpenTelemetry collector
+        if: always()
+        run: |
+          mkdir -p artifacts/otel
+          docker logs metadata-otel > artifacts/otel/collector.log 2>&1 || true
+          docker stop --time 10 metadata-otel || true
+          docker rm metadata-otel || true
 
       - name: Report coverage
         if: always()
@@ -88,5 +115,6 @@ jobs:
             artifacts/unit-integration
             artifacts/e2e-results
             artifacts/e2e
+            artifacts/otel
           if-no-files-found: warn
           retention-days: 7
