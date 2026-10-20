@@ -8,4 +8,39 @@ Accept: text/plain
 GET {{MetadataApi_HostAddress}}/openapi/v1.json
 Accept: application/json
 
-###
+### Create an application
+# @name createApplication
+POST {{MetadataApi_HostAddress}}/api/v1/applications
+Content-Type: application/json
+
+{
+  "title": "Inventory Portal",
+  "version": "1.2.0",
+  "company": "Example Company",
+  "website": "https://inventory.example.com",
+  "source": "https://github.com/example/inventory",
+  "license": "Apache-2.0",
+  "description": "Tracks inventory across warehouses."
+}
+
+### Read the application created above (REST Client response variable)
+GET {{MetadataApi_HostAddress}}/api/v1/applications/{{createApplication.response.body.$.id}}
+Accept: application/json
+
+### Missing application: 404 Problem Details
+GET {{MetadataApi_HostAddress}}/api/v1/applications/ffffffff-ffff-ffff-ffff-ffffffffffff
+Accept: application/json
+
+### Invalid application ID: 400 validation Problem Details
+GET {{MetadataApi_HostAddress}}/api/v1/applications/not-a-guid
+Accept: application/json
+
+### Invalid metadata: 400 with field-keyed errors
+POST {{MetadataApi_HostAddress}}/api/v1/applications
+Content-Type: application/json
+
+{
+  "title": "",
+  "version": "v1",
+  "website": "ftp://example.com"
+}
