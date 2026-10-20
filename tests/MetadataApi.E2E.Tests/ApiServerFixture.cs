@@ -15,13 +15,18 @@ public sealed class ApiServerFixture : IAsyncLifetime
         ?? throw new InvalidOperationException("The test build configuration is missing.");
     private readonly string apiKey = Environment.GetEnvironmentVariable("Authentication__ApiKey")
         ?? Convert.ToHexString(RandomNumberGenerator.GetBytes(32));
-    private readonly string databaseDirectory = Path.Combine(
-        FindRepositoryRoot(), "artifacts", "databases", $"metadata-api-e2e-{Guid.NewGuid():N}");
+    private string DatabaseDirectory => Path.Combine(LogDirectory, "database");
     private readonly string runId = Guid.NewGuid().ToString("N");
     private Process? server;
     private TextWriter? serverLog;
     private HttpClient? client;
     private int startCount;
+
+    private readonly IReadOnlyDictionary<string, string> settings;
+
+    public ApiServerFixture() : this(new Dictionary<string, string>()) { }
+
+    internal ApiServerFixture(IReadOnlyDictionary<string, string> settings) => this.settings = settings;
 
     public HttpClient Client => client
         ?? throw new InvalidOperationException("The E2E server has not started.");
@@ -36,7 +41,7 @@ public sealed class ApiServerFixture : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        Directory.CreateDirectory(databaseDirectory);
+        Directory.CreateDirectory(DatabaseDirectory);
         Directory.CreateDirectory(LogDirectory);
         var initialized = false;
         try
@@ -192,8 +197,31 @@ public sealed class ApiServerFixture : IAsyncLifetime
         var baseAddress = await listening.Task.WaitAsync(TimeSpan.FromSeconds(30));
         client = new HttpClient { BaseAddress = baseAddress, Timeout = TimeSpan.FromSeconds(15) };
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
-        using var readiness = await client.GetAsync("/health/live");
-        readiness.EnsureSuccessStatusCode();
+        using var readinessTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
+        try
+        {
+            while (true)
+            {
+                try
+                {
+                    using var readiness = await client.GetAsync("/health/ready", readinessTimeout.Token);
+                    if (readiness.IsSuccessStatusCode)
+                    {
+                        break;
+                    }
+                }
+                catch (HttpRequestException) when (!process.HasExited)
+                {
+                    // The listener can become available before the application is ready.
+                }
+
+                await Task.Delay(TimeSpan.FromMilliseconds(100), readinessTimeout.Token);
+            }
+        }
+        catch (OperationCanceledException) when (readinessTimeout.IsCancellationRequested)
+        {
+            throw new TimeoutException($"The E2E API did not become ready within 30 seconds. See {logPath}.");
+        }
     }
 
     private ProcessStartInfo CreateStartInfo(params string[] arguments)
@@ -210,7 +238,7 @@ public sealed class ApiServerFixture : IAsyncLifetime
             info.ArgumentList.Add(argument);
         }
 
-        info.Environment["Database__Path"] = Path.Combine(databaseDirectory, "metadata.db");
+        info.Environment["Database__Path"] = Path.Combine(DatabaseDirectory, "metadata.db");
         info.Environment["Authentication__ApiKey"] = apiKey;
         info.Environment["ASPNETCORE_ENVIRONMENT"] = "Production";
         info.Environment["DOTNET_ENVIRONMENT"] = "Production";
@@ -218,6 +246,10 @@ public sealed class ApiServerFixture : IAsyncLifetime
         info.Environment["Logging__LogLevel__Microsoft.Hosting.Lifetime"] = "Information";
         info.Environment["Logging__Console__FormatterName"] = "simple";
         info.Environment["Logging__Console__FormatterOptions__ColorBehavior"] = "Disabled";
+        foreach (var (key, value) in settings)
+        {
+            info.Environment[key] = value;
+        }
         return info;
     }
 
@@ -245,9 +277,9 @@ public sealed class ApiServerFixture : IAsyncLifetime
     public async Task DisposeAsync()
     {
         await StopServerAsync();
-        if (Directory.Exists(databaseDirectory))
+        if (Directory.Exists(DatabaseDirectory))
         {
-            Directory.Delete(databaseDirectory, recursive: true);
+            Directory.Delete(DatabaseDirectory, recursive: true);
         }
     }
 
