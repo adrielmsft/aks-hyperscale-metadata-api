@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net.Http.Headers;
 using System.Security.Cryptography;
 using System.Reflection;
+using System.Text.Json;
 
 namespace MetadataApi.E2E.Tests;
 
@@ -22,11 +23,12 @@ public sealed class ApiServerFixture : IAsyncLifetime
     private HttpClient? client;
     private int startCount;
 
-    private readonly IReadOnlyDictionary<string, string> settings;
-
     public ApiServerFixture() : this(new Dictionary<string, string>()) { }
 
-    internal ApiServerFixture(IReadOnlyDictionary<string, string> settings) => this.settings = settings;
+    internal ApiServerFixture(IReadOnlyDictionary<string, string> settings) => EnvironmentVariables = settings;
+
+    public IReadOnlyDictionary<string, string> EnvironmentVariables { get; init; } =
+        new Dictionary<string, string>();
 
     public HttpClient Client => client
         ?? throw new InvalidOperationException("The E2E server has not started.");
@@ -172,6 +174,12 @@ public sealed class ApiServerFixture : IAsyncLifetime
             }
 
             log.WriteLine(line);
+            if (line.StartsWith('{'))
+            {
+                using var entry = JsonDocument.Parse(line);
+                line = entry.RootElement.GetProperty("Message").GetString() ?? "";
+            }
+
             const string marker = "Now listening on: ";
             var markerIndex = line.IndexOf(marker, StringComparison.Ordinal);
             if (markerIndex >= 0
@@ -244,12 +252,11 @@ public sealed class ApiServerFixture : IAsyncLifetime
         info.Environment["DOTNET_ENVIRONMENT"] = "Production";
         info.Environment["Logging__LogLevel__Default"] = "Warning";
         info.Environment["Logging__LogLevel__Microsoft.Hosting.Lifetime"] = "Information";
-        info.Environment["Logging__Console__FormatterName"] = "simple";
-        info.Environment["Logging__Console__FormatterOptions__ColorBehavior"] = "Disabled";
-        foreach (var (key, value) in settings)
+        foreach (var (name, value) in EnvironmentVariables)
         {
-            info.Environment[key] = value;
+            info.Environment[name] = value;
         }
+
         return info;
     }
 

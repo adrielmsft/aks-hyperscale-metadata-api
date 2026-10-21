@@ -338,6 +338,53 @@ dotnet ef migrations add DescribeSchemaChange --project src\MetadataApi --output
 
 Review generated migrations for destructive changes before applying them.
 
+## Observability
+
+OpenTelemetry is the production-readiness standout: the API emits safe HTTP server/client
+traces, built-in ASP.NET Core/Kestrel metrics, and JSON console logs correlated by
+`TraceId`/`SpanId` in scopes. `service.name` is `metadata-api`; `service.version` comes
+from the API assembly. No collector, dashboard, or cloud account is required to run it.
+
+**Optional export:** set the standard `OTEL_EXPORTER_OTLP_ENDPOINT` (for example,
+`http://localhost:4317`) to enable OTLP export of traces, metrics, and logs. With no
+endpoint configured there is no exporter or network delivery attempt. The default
+protocol is gRPC; standard OTel exporter settings such as `OTEL_EXPORTER_OTLP_PROTOCOL`
+can select HTTP/protobuf instead. Standard `OTEL_METRIC_EXPORT_INTERVAL` controls the
+metric export interval (milliseconds; the SDK default is 60 seconds).
+
+- `http.server.request.duration` is a histogram: its count gives request count and its
+  buckets give latency. `http.route` uses route templates, not resource IDs or queries.
+- `http.server.active_requests` and Kestrel connection metrics describe concurrent work.
+  Active requests intentionally have no route dimension: routing has not happened yet.
+- The `Microsoft.AspNetCore.RateLimiting` meter is subscribed independently of limiter
+  middleware; its rejected-request measurements appear once rate limiting is enabled.
+- Health endpoints remain measurable but are excluded from traces and completion logs.
+- Existing Problem Details responses contain `traceId` (the W3C Activity ID, containing
+  the trace ID), verified against the exported span. No redundant response header is added.
+
+**Safeguards:** HTTP span tags are allowlisted; raw URLs, queries, headers (including
+Authorization/API keys), request bodies, and maintainer emails are not collected. Safe
+completion logs use method, route template, and status instead of raw paths. Framework
+request/HttpClient informational URL logs and EF command informational logs are suppressed.
+EF Core/SQLite command spans are deliberately **not enabled**, avoiding SQL and parameter
+capture. Do not enable sensitive-data logging or verbose framework diagnostics in production.
+Trace/log batch queues explicitly hold at most 512 records each (128 per batch), with
+one-second batch scheduling/export timeouts and a one-second OTLP timeout. Failed exports
+are dropped/retried by the SDK, never awaited in the request path. Metrics use bounded SDK
+aggregation rather than a per-request export queue.
+
+**Collector proof:** CI starts pinned `otel/opentelemetry-collector-contrib:0.147.0`
+with `.github/otel-collector-config.yaml`, receives OTLP, and writes JSON under
+`artifacts/otel` (uploaded with test results). The E2E smoke issues an authenticated-client
+compatible request for a missing application, extracts Problem Details `traceId`, then
+polls up to 30 seconds for that trace, the route template, and the duration metric in the
+collector file. Locally it skips unless `OTEL_SMOKE_EXPORT_FILE` is set. To opt in, run the
+same collector with its `/data` directory mounted to a local output directory, then set
+`OTEL_SMOKE_EXPORT_FILE` to the host path of `telemetry.json` and `OTEL_SMOKE_ENDPOINT` to
+`http://localhost:4317`; run the E2E project normally. The smoke fixture configures OTLP
+and a one-second metric interval only for its own API process. It uses the fixture's
+`Client` so default authentication headers remain intact.
+
 ## Test
 
 ```powershell

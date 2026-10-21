@@ -4,9 +4,11 @@ using MetadataApi.Endpoints;
 using MetadataApi.Middleware;
 using MetadataApi.Persistence;
 using MetadataApi.Reliability;
+using MetadataApi.Observability;
 using MetadataApi.Services;
 
 var builder = WebApplication.CreateBuilder(args);
+builder.AddApiObservability();
 
 builder.Services.AddDbContext<MetadataDbContext>(options =>
     options.UseMetadataSqlite(
@@ -37,6 +39,7 @@ await using (var scope = app.Services.CreateAsyncScope())
     await MetadataDatabase.InitializeAsync(database);
 }
 
+app.UseApiObservability();
 app.UseExceptionHandler();
 app.UseStatusCodePages();
 app.UseReliability();
