@@ -437,4 +437,4 @@ Runs: [Actions → CI](https://github.com/adrielmsft/aks-hyperscale-metadata-api
 - **Shared API key** Assumes API is only called by a few trusted services. Quick to implement given time constraints, but next step would be to support per-client keys or use an identity provider if the API needs to be used at a large scale.
 
 ## Cost
-~10 hours of active work over the span of over 15 hours.
+~9 hours of active work throughout the day
