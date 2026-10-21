@@ -1,154 +1,145 @@
 # Metadata API
 
-An ASP.NET Core API for application and maintainer metadata. See the
-[design document](aks-metadata-api-design.md) for the planned behavior and implementation milestones.
+A RESTful ASP.NET Core (.NET 10) API for managing **Application** and **Maintainer**
+metadata and the many-to-many links between them. Data is stored in file-backed
+SQLite through EF Core. See the [design document](aks-metadata-api-design.md) for
+the full requirements, validation scheme, and rationale.
 
-## Current status
+[![CI](https://github.com/adrielmsft/aks-hyperscale-metadata-api/actions/workflows/ci.yml/badge.svg)](https://github.com/adrielmsft/aks-hyperscale-metadata-api/actions/workflows/ci.yml)
 
-The API manages application and maintainer metadata using SQLite and EF Core.
-See the API reference below for currently implemented operations. Liveness,
-OpenAPI, input validation, Problem Details, and real HTTP CI tests are available.
-Authentication and telemetry are not implemented yet.
+## Contents
 
-## Prerequisites
+- [Quick start](#quick-start)
+- [API reference](#api-reference)
+- [Production features](#production-features)
+- [Storage](#storage)
+- [Testing and CI](#testing-and-ci)
+- [Key design decisions](#key-design-decisions)
 
-- [.NET SDK 10.0.402](https://dotnet.microsoft.com/download/dotnet/10.0), or a newer
-  patch in the 10.0.4xx feature band. SDK selection is pinned in `global.json`;
-  prerelease SDKs and other feature bands are not selected automatically.
-- Git. No database service, cloud account, or secrets are needed for this increment.
+## Quick start
 
-Run the following commands from the repository root.
+Prerequisites: [.NET SDK 10.0.402](https://dotnet.microsoft.com/download/dotnet/10.0)
+(or a newer 10.0.4xx patch; pinned in `global.json`) and Git. No database service,
+cloud account, or committed secrets are needed.
 
-## Authentication
-
-Shared API-key authentication is now required; this section supersedes the older
-unauthenticated status notes above and below. Before following **Build and run**,
-generate a random key in the same PowerShell terminal (environment variables are
-the simplest local setup; no user-secrets configuration is required):
+From the repository root in PowerShell:
 
 ```powershell
+# 1. Generate a local API key (required; at least 32 characters)
 $env:Authentication__ApiKey = [Convert]::ToHexString([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
+
+# 2. Restore, build, create the database, and run
 dotnet tool restore
 dotnet build MetadataApi.slnx
 dotnet ef database update --project src\MetadataApi
 dotnet run --project src\MetadataApi --launch-profile http
 ```
 
-`Authentication:ApiKey` (environment variable `Authentication__ApiKey`) must be
-nonblank and at least 32 characters; options validation fails startup otherwise.
-Do not commit the generated value, paste it into logs, or reuse a test key in
-production. Provision the key through your deployment's secret configuration.
-Require HTTPS for public deployments. All authenticated clients have shared
-administrative access, not per-maintainer permissions.
-
-Send `Authorization: Bearer <api-key>` on every `/api/v1/**` request, including
-future resource endpoints. Missing/invalid credentials return the same `401`
-`application/problem+json` response with `WWW-Authenticate: Bearer`, before any
-resource lookup. Keys are compared using constant-time SHA-256 hash comparison.
-The default/fallback authorization policy protects new endpoints automatically;
-new health endpoints must explicitly call `.AllowAnonymous()`. `/health/live`
-and `/health/ready`, plus the Development-only `/openapi/v1.json` document, are explicitly anonymous.
-
-For the PowerShell resource examples below, supply `-Headers $headers` on each
-`Invoke-RestMethod` call:
+The API listens at `http://localhost:5108`. In another terminal, set
+`$env:Authentication__ApiKey` to the same key, then run:
 
 ```powershell
 $headers = @{ Authorization = "Bearer $env:Authentication__ApiKey" }
-Invoke-RestMethod -Uri http://localhost:5108/api/v1/applications -Headers $headers
+$app = Invoke-RestMethod -Method Post -Uri http://localhost:5108/api/v1/applications -Headers $headers -ContentType application/json -Body '{"title":"Microsoft Garage","version":"1.2.0"}'
+Invoke-RestMethod -Uri "http://localhost:5108/api/v1/applications/$($app.id)" -Headers $headers
+curl.exe --fail http://localhost:5108/health/ready
 ```
 
-`MetadataApi.http` reads the key from the `Authentication__ApiKey` process
-environment variable. Launch your HTTP client/editor from the configured terminal,
-or set its local, untracked variable `apiKey`; never save a real key in that file.
-The API test factory supplies a test-only key and default client header; use
-`CreateUnauthenticatedClient()` for negative tests. Real-process E2E fixtures
-use a random key per fixture (or the CI-generated ephemeral key), pass it only
-through the server environment, and expose an unauthenticated client. CI masks
-its ephemeral key and supplies it only to the E2E test step; no production secret
-is needed.
-
-## Build and run
+Run all tests (unit, SQLite integration, and real-HTTP E2E):
 
 ```powershell
 dotnet tool restore
-dotnet build MetadataApi.slnx
-dotnet ef database update --project src\MetadataApi
-dotnet run --project src\MetadataApi --launch-profile http
+dotnet test MetadataApi.slnx --configuration Release
 ```
 
-The migration command creates or updates the database without deleting existing
-records. Run it again after pulling changes that add migrations. Startup rejects
-pending migrations instead of automatically modifying the schema.
+[MetadataApi.http](src/MetadataApi/MetadataApi.http) contains ready-made successful
+and failing requests; it reads the key from the `Authentication__ApiKey` environment
+variable. On Linux/macOS, use `/` path separators and `curl` instead of `curl.exe`.
 
-The API listens at `http://localhost:5108` in Development mode:
+## API reference
 
-- `GET /health/live` returns `200 OK` with the plain-text body `Healthy`.
-  This checks process liveness only, not database readiness.
-- `GET /openapi/v1.json` returns the generated OpenAPI document describing
-  Application operations; the liveness endpoint is not included.
-- Unknown routes return `404` Problem Details.
+In Development, the OpenAPI document is served at `GET /openapi/v1.json`.
 
-Use [MetadataApi.http](src/MetadataApi/MetadataApi.http) with an HTTP request client,
-or verify liveness from another terminal:
+### Conventions
 
-```powershell
-curl.exe --fail http://localhost:5108/health/live
-```
+- Base path `/api/v1`; plural resource names; server-generated GUID IDs in paths.
+- Every `/api/v1` request requires `Authorization: Bearer <api-key>`.
+- JSON with exact camelCase property names. Optional fields are returned as explicit
+  `null`. Unknown properties (including `id`), duplicate properties, and wrong value
+  types are rejected.
+- `POST` returns `201 Created` with a `Location` header. `PUT` is a full replacement
+  (omitted optional fields are cleared) and never creates a missing resource.
+  `DELETE` returns `204`, and `404` on repeat.
+- Text is trimmed; blank optional fields become `null`. Names, titles, and emails
+  are not unique. Updates are last-write-wins (no ETags).
 
-Stop the server with Ctrl+C. Authentication is not implemented yet; keep the
-server bound to localhost and do not expose it publicly.
-
-## Application API
+### Applications
 
 | Method | Path | Success |
 | --- | --- | --- |
-| POST | `/api/v1/applications` | 201 with the created resource and a Location header |
-| GET | `/api/v1/applications?limit=20&offset=0` | 200 with a bounded page of resources |
-| GET | `/api/v1/applications/{applicationId}` | 200 with the stored resource |
-| PUT | `/api/v1/applications/{applicationId}` | 200 with fully replaced metadata |
-| DELETE | `/api/v1/applications/{applicationId}` | 204 with no body |
+| POST | `/api/v1/applications` | 201 + created resource |
+| GET | `/api/v1/applications?limit=20&offset=0` | 200 + page |
+| GET | `/api/v1/applications/{applicationId}` | 200 + resource |
+| PUT | `/api/v1/applications/{applicationId}` | 200 + replaced resource |
+| DELETE | `/api/v1/applications/{applicationId}` | 204 |
 
-Create and fetch an application from PowerShell:
-
-```powershell
-$application = Invoke-RestMethod -Method Post -Uri http://localhost:5108/api/v1/applications -ContentType application/json -Body '{"title":"Inventory Portal","version":"1.2.0"}'
-Invoke-RestMethod -Uri "http://localhost:5108/api/v1/applications/$($application.id)"
-Invoke-RestMethod -Uri "http://localhost:5108/api/v1/applications?limit=20&offset=0"
-Invoke-RestMethod -Method Put -Uri "http://localhost:5108/api/v1/applications/$($application.id)" -ContentType application/json -Body '{"title":"Microsoft Garage","version":"2.0.0"}'
-Invoke-RestMethod -Method Delete -Uri "http://localhost:5108/api/v1/applications/$($application.id)"
-```
-
-Example create response (the server generates the ID):
+Request body (`title` required; all other fields optional):
 
 ```json
 {
-  "id": "d29fa39b-1bcb-4cf4-a841-a1eae83e0486",
-  "title": "Inventory Portal",
+  "title": "Microsoft Garage",
   "version": "1.2.0",
-  "company": null,
-  "website": null,
-  "source": null,
-  "license": null,
-  "description": null
+  "company": "Microsoft",
+  "website": "https://garage.example.com",
+  "source": "https://github.com/example/garage",
+  "license": "Apache-2.0",
+  "description": "An internal application for managing Microsoft Garage locations and staff."
 }
 ```
 
-Title is required; all other metadata is optional. Text is trimmed and blank
-optional fields become null. Versions, when supplied, must follow SemVer 2.0.0.
-Website and Source must be absolute HTTP(S) URLs without embedded credentials;
-the API never fetches them. Names/titles are not unique: repeated POST requests
-create distinct resources. Creation does not add maintainer associations.
+The response has the same fields plus `id`. `version` must follow SemVer 2.0.0;
+`website` and `source` must be absolute HTTP(S) URLs without embedded credentials
+(never fetched). Deleting an application removes only its maintainer links, never
+the maintainers.
 
-PUT is a full replacement, not a partial update: Title is required and omitted
-optional fields become null. The ID and existing maintainer links do not change.
-A missing application is not created. Updates use last-write-wins, with no ETag
-or optimistic concurrency check. DELETE removes the application and its links
-only, never its maintainers or other applications. Repeat deletion returns 404.
+### Maintainers
 
-Collection GET defaults to `limit=20` and `offset=0`. Limit must be an integer
-from 1 through 100 and offset an integer from 0 through 10,000; invalid values
-return 400, not clamped results. Results are ordered by ID ascending in SQLite.
-The API fetches at most `limit + 1` rows and returns an envelope:
+| Method | Path | Success |
+| --- | --- | --- |
+| POST | `/api/v1/maintainers` | 201 + created resource |
+| GET | `/api/v1/maintainers?limit=20&offset=0` | 200 + page |
+| GET | `/api/v1/maintainers/{maintainerId}` | 200 + resource |
+| PUT | `/api/v1/maintainers/{maintainerId}` | 200 + replaced resource |
+| DELETE | `/api/v1/maintainers/{maintainerId}` | 204 |
+
+```json
+{ "name": "Garage Makers", "email": "garage.makers@example.com" }
+```
+
+Both fields are required. `name` is up to 200 characters of Unicode text; `email`
+is up to 254 characters and validated for syntax only (`EmailAddressAttribute`, no
+display-name forms, no DNS or deliverability checks). Maintainers are contact
+metadata, not login identities. Deleting a maintainer removes only its links.
+
+### Application–maintainer links
+
+| Method | Path | Success |
+| --- | --- | --- |
+| PUT | `/api/v1/applications/{applicationId}/maintainers/{maintainerId}` | 204, link exists |
+| DELETE | `/api/v1/applications/{applicationId}/maintainers/{maintainerId}` | 204, link absent |
+| GET | `/api/v1/applications/{applicationId}/maintainers` | 200 + page of maintainers |
+| GET | `/api/v1/maintainers/{maintainerId}/applications` | 200 + page of applications |
+
+Link PUT and DELETE take no body and are idempotent: repeated or concurrent PUTs
+produce one link, and DELETE of an absent link returns 204. Both resources must
+exist (404 otherwise). Nested lists return 404 for a missing parent and an empty
+page for a parent without links.
+
+### Pagination
+
+All list endpoints accept `limit` (default 20, 1–100) and `offset` (default 0,
+0–10,000). Invalid values return 400; they are never clamped. Results are ordered
+by ID ascending:
 
 ```json
 {
@@ -159,379 +150,211 @@ The API fetches at most `limit + 1` rows and returns an envelope:
 }
 ```
 
-`items` contains Application representations (including explicit null optional
-fields). `nextOffset` is `offset + limit` only if more rows exist and that offset
-is at most 10,000; otherwise it is null. Empty and out-of-data pages have
-`items: []`. Pagination is not a snapshot: concurrent writes may shift results.
+`nextOffset` is `offset + limit` only when more results exist (determined by
+fetching `limit + 1` rows) and that offset is within range. Pages are not
+snapshots; concurrent writes may shift results.
 
-JSON uses exact camelCase property names. Unknown properties (including a supplied
-`id`), duplicate properties, and incorrect value types are rejected. See the
-[validation scheme](aks-metadata-api-design.md#data-model-input-validation)
-for field limits.
+### Errors
 
-Errors use `application/problem+json`:
+All errors use `application/problem+json` and include a `traceId`. Validation
+failures include a field-keyed `errors` object:
 
-- **400:** malformed JSON, invalid fields or pagination, or invalid/empty GUIDs. Metadata and
-  ID validation errors include a field-keyed `errors` object.
-- **404:** a valid application ID does not exist.
-- **415:** the POST or PUT body does not use a supported JSON content type.
-- **503:** database lock contention exhausted the bounded wait; the write did not succeed.
-- **500:** an unexpected failure, without internal exception details.
+```json
+{
+  "type": "https://tools.ietf.org/html/rfc9110#section-15.5.1",
+  "title": "One or more validation errors occurred.",
+  "status": 400,
+  "errors": { "email": ["Email must be a valid email address without a display name."] },
+  "traceId": "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+}
+```
 
-Use the Development OpenAPI document for operation schemas and
-[MetadataApi.http](src/MetadataApi/MetadataApi.http) for successful and failing requests.
+| Status | Meaning |
+| --- | --- |
+| 400 | Malformed JSON, invalid fields or query parameters, unknown properties, invalid/empty GUIDs |
+| 401 | Missing or invalid API key (`WWW-Authenticate: Bearer`); checked before any resource lookup |
+| 404 | Resource or link target does not exist; unknown route |
+| 405 | Method not supported on the route (includes `Allow`) |
+| 413 | Request body exceeds the configured limit |
+| 415 | POST/PUT body is not JSON |
+| 429 | Rate limit exceeded (`Retry-After` in seconds) |
+| 500 | Unexpected failure; generic message, details only in server logs |
+| 503 | Database lock wait exceeded (the write did not happen), or readiness check failed |
 
-### Associations
+### Health
 
-Manage links separately from resource metadata; applications and maintainers may
-have zero or more links. There is no association ID or request body.
+`GET /health/live` (process only) and `GET /health/ready` (opens and queries the
+database) return `Healthy` or `503 Unhealthy`. Both are anonymous and exempt from
+rate limiting.
 
-| Method | Path | Success |
+## Production features
+
+### ⭐ Observability (highlighted feature)
+
+OpenTelemetry traces, metrics, and logs, designed to be safe by default and
+optional to export.
+
+- **Traces:** one server span per request (health probes excluded). A tag
+  allowlist keeps only method, status, route template, protocol, error type, and
+  port, so raw URLs, IDs, query strings, headers, and bodies are never recorded.
+  EF Core SQL spans are intentionally disabled to avoid capturing SQL and parameters.
+- **Metrics:** built-in ASP.NET Core meters. `http.server.request.duration` gives
+  request count and latency by `http.route` template, `http.server.active_requests`
+  tracks concurrency, and `Microsoft.AspNetCore.RateLimiting` reports limiter
+  rejections. Kestrel connection metrics are also collected.
+- **Correlated logs:** JSON console logs include `TraceId`/`SpanId`, and each
+  request logs one line with method, route template, and status. The `traceId` in
+  every Problem Details response leads directly to the trace and logs.
+- **Optional OTLP export:** set the standard `OTEL_EXPORTER_OTLP_ENDPOINT` (for
+  example `http://localhost:4317`) to export all three signals. Without it, no
+  exporter is registered and the API runs normally. Standard variables such as
+  `OTEL_EXPORTER_OTLP_PROTOCOL` and `OTEL_METRIC_EXPORT_INTERVAL` apply.
+- **Safeguards:** API keys, Authorization headers, request bodies, and maintainer
+  emails are never collected. Export queues are bounded (512 items, 128 per
+  batch) with one-second timeouts, and failed exports never block or fail
+  requests (verified by a test that points at an unreachable endpoint).
+- **Proven end to end:** CI runs a pinned `otel/opentelemetry-collector-contrib:0.147.0`
+  ([config](.github/otel-collector-config.yaml)). An E2E test sends a real request,
+  takes the `traceId` from the response, and waits until that trace and the
+  request-duration metric appear in the collector's output. Locally, the test is
+  skipped unless `OTEL_SMOKE_EXPORT_FILE` (collector output file) and
+  `OTEL_SMOKE_ENDPOINT` are set.
+
+### Authentication
+
+- A single shared API key, sent as `Authorization: Bearer <key>` and configured
+  through `Authentication:ApiKey` (environment variable `Authentication__ApiKey`).
+  Startup fails if the key is missing, blank, or shorter than 32 characters.
+- Implemented as an ASP.NET Core authentication handler with a **fallback
+  authorization policy**: every endpoint requires the key unless it explicitly
+  opts out. Only the health probes and Development OpenAPI document opt out.
+- Keys are compared in constant time over SHA-256 hashes. Every failure returns
+  the same 401 before any resource lookup, so responses never reveal whether a
+  resource exists. The key is never logged.
+- All callers share administrative access (no per-user permissions). Store the
+  key in a secret store, and require HTTPS for any public deployment.
+
+### Reliability
+
+| Setting | Environment variable | Default |
 | --- | --- | --- |
-| PUT | `/api/v1/applications/{applicationId}/maintainers/{maintainerId}` | 204, ensure the link exists |
-| DELETE | `/api/v1/applications/{applicationId}/maintainers/{maintainerId}` | 204, ensure the link is absent |
-| GET | `/api/v1/applications/{applicationId}/maintainers?limit=20&offset=0` | 200, page of Maintainer resources |
-| GET | `/api/v1/maintainers/{maintainerId}/applications?limit=20&offset=0` | 200, page of Application resources |
+| `RateLimiting:PermitLimit` | `RateLimiting__PermitLimit` | 1000 requests |
+| `RateLimiting:WindowSeconds` | `RateLimiting__WindowSeconds` | 60 seconds |
+| `Limits:MaxRequestBodyBytes` | `Limits__MaxRequestBodyBytes` | 65536 bytes (64 KiB) |
 
-PUT and DELETE require both resources to exist (404 otherwise). Repeated PUTs,
-including concurrent duplicates, create just one link; repeated DELETEs return
-204 even if the link is already absent. Both mutations return no content and
-never modify resource metadata. Invalid or empty GUIDs return 400 validation
-Problem Details with field-keyed errors.
+All settings are validated at startup.
 
-Nested lists use the same `items`, `limit`, `offset`, and `nextOffset` envelope
-and pagination rules described above: limit 1–100 (default 20), offset 0–10,000
-(default 0), returned-resource ID ascending, and a `limit + 1` database fetch.
-A missing parent returns 404; an existing parent without links returns an empty
-page. Concurrent writes may shift pages.
+- **Rate limiting:** a built-in global fixed-window limiter with no queue returns
+  429 with `Retry-After`. It runs **before authentication**, so unauthenticated
+  floods are throttled too. The limit is per process, not per client.
+- **Request body limit (OOM prevention):** enforced before JSON deserialization,
+  for both `Content-Length` and chunked bodies; oversized bodies return 413. List
+  responses are always bounded by pagination, and telemetry queues are bounded.
+- **Bounded database contention:** a five-second SQLite lock wait, then 503.
+  There are no blanket retries, because replaying a POST could create duplicates.
+- **Safe failures:** centralized exception handling returns a generic 500 with a
+  `traceId`; stack traces and database details stay in server logs.
+- **Health probes:** separate liveness and readiness endpoints for orchestrators.
+- **Input validation:** strict JSON, field rules, and GUID/pagination validation
+  at the API boundary. All field errors are reported together.
 
-The initial migration already supplies the composite primary key, foreign keys,
-cascading link deletion, and reverse-lookup index; no additional migration is
-needed. Short SQLite write transactions protect parent checks and link changes;
-a parameterized `ON CONFLICT (ApplicationId, MaintainerId) DO NOTHING` insert
-makes duplicate PUTs successful without suppressing other constraint failures.
-Resource updates preserve links; deleting either resource removes only its own
-links, never the resources on the other side. Links persist across restarts of
-the API using the same database file. SQLite/service tests, API tests, and
-real-Kestrel E2E tests cover these guarantees; the E2E suite also verifies link
-removal and both resource-deletion directions across restart.
+Middleware order: observability → exception handling → rate limiting and body
+limits → authentication → authorization → endpoints.
 
-## Maintainer API
+## Storage
 
-| Method | Path | Success |
+**File-backed SQLite via EF Core**, sized for a single API instance on one machine.
+
+- **Consistency:** foreign keys are enforced on every connection, a composite
+  primary key `(ApplicationId, MaintainerId)` prevents duplicate links, and
+  deletions cascade to link rows only. Each write runs in a single transaction;
+  link changes check both parents and write inside one short transaction.
+  Duplicate-link PUTs use `INSERT ... ON CONFLICT DO NOTHING`.
+- **Durability:** WAL journal mode with `synchronous=FULL`, so a committed write
+  is synced to disk before the response returns, provided the storage honors
+  sync requests. Data survives restarts (verified by E2E tests).
+- **Concurrency:** WAL lets readers proceed alongside one writer. Writers wait up
+  to five seconds for the lock before returning 503.
+- **Scaling:** suited to one instance. Reads are indexed and paginated in the
+  database. SQLite allows one writer at a time and must not be shared over network
+  storage. Multiple replicas or heavy write load would require moving to
+  PostgreSQL or SQL Server, which EF Core supports with provider-specific
+  migrations.
+
+Configuration and operations:
+
+- The database file is `Database:Path` (`Database__Path`), defaulting to
+  `metadata.db` in `src/MetadataApi`. Use the same value for migrations and for
+  the server.
+- Schema changes go through explicit EF Core migrations
+  (`dotnet ef database update --project src\MetadataApi`). Startup refuses to run
+  with pending migrations rather than changing the schema automatically.
+- **Backup:** stop the API and copy the database together with any WAL file, or
+  use SQLite's online backup API / `.backup` command. Never copy only the main
+  file while the API is running.
+
+## Testing and CI
+
+| Suite | Project | What it covers |
 | --- | --- | --- |
-| POST | `/api/v1/maintainers` | 201 with the created resource and a Location header |
-| GET | `/api/v1/maintainers/{maintainerId}` | 200 with the stored resource |
-| PUT | `/api/v1/maintainers/{maintainerId}` | 200 with the fully replaced resource |
-| DELETE | `/api/v1/maintainers/{maintainerId}` | 204 with no body |
-| GET | `/api/v1/maintainers?limit=20&offset=0` | 200 with a bounded page |
+| Unit | `tests/MetadataApi.Tests` | Validation and normalization (length boundaries, SemVer, URLs, control characters), pagination, authentication and options validation |
+| SQLite integration | `tests/MetadataApi.Tests` | Migrations, pragmas/WAL, foreign keys, duplicate links, cascades, rollback, bounded lock contention, persistence after reopen |
+| In-process API | `tests/MetadataApi.Tests` | Full HTTP contracts through `WebApplicationFactory` against real SQLite: CRUD, links, pagination, errors, 401/413/429/500/503, telemetry privacy and correlation |
+| Real HTTP E2E | `tests/MetadataApi.E2E.Tests` | Starts the built API as a separate Kestrel process (Production mode, temporary database, random API key) and tests over loopback HTTP |
 
-Create or fully replace contact metadata with a JSON body:
-
-```json
-{
-  "name": "Garage Makers",
-  "email": "Garage.Makers@example.com"
-}
-```
-
-Example resource response (POST generates the ID; PUT keeps it unchanged):
-
-```json
-{
-  "id": "54b28c61-8ec5-42c1-966b-3564c59bf965",
-  "name": "Garage Makers",
-  "email": "Garage.Makers@example.com"
-}
-```
-
-Both `name` and `email` are required on POST and PUT; omitted, null, or blank
-values return 400. Text is trimmed before validation and storage, preserving
-internal whitespace and casing. Names allow Unicode and are limited to 200
-UTF-16 code units; email is limited to 254. Single-line fields reject control
-characters. Email uses .NET `EmailAddressAttribute` basic syntax validation and
-rejects display-name forms such as `Garage <garage@example.com>`. No DNS,
-ownership, or deliverability checks are performed. Duplicate names and emails
-are allowed: maintainers are contact metadata, not authenticated identities.
-
-JSON uses exact camelCase property names. Unknown properties (including `id`),
-duplicate properties, malformed JSON, and wrong value types return 400.
-IDs are server-generated, immutable, non-empty GUIDs. Invalid/empty route GUIDs
-return 400; syntactically valid missing IDs return 404, including on PUT and
-DELETE. PUT is a full replacement, not an upsert; last write wins without
-optimistic concurrency. Updates preserve application links. Deletion removes
-only the maintainer and its links, never the associated applications.
-
-Collection responses use this envelope:
-
-```json
-{
-  "items": [
-    {
-      "id": "54b28c61-8ec5-42c1-966b-3564c59bf965",
-      "name": "Garage Makers",
-      "email": "Garage.Makers@example.com"
-    }
-  ],
-  "limit": 20,
-  "offset": 0,
-  "nextOffset": null
-}
-```
-
-`limit` defaults to 20 and must be an integer from 1 through 100. `offset`
-defaults to 0 and must be an integer from 0 through 10000. Invalid values
-return 400, never clamping. Results are ordered in SQLite by ID ascending and
-use bounded offset pagination with one-row lookahead. `nextOffset` is present
-as a number only when more records exist and the next offset is supported;
-otherwise it is null. Empty or beyond-end pages return 200 with empty `items`.
-Pages are not snapshots: concurrent writes can change subsequent pages.
-
-Errors use `application/problem+json`, with field-keyed `errors` for metadata,
-route-ID, and pagination validation. POST and PUT require a supported JSON
-content type (otherwise 415). Database contention returns 503 after the existing
-five-second bounded lock wait, without changing the requested resource.
-Unexpected failures return 500 without exposing exception details.
-
-Maintainer validation and service tests, real SQLite-backed API tests, and
-separate-process `MaintainerE2ETests` cover CRUD, replacement, duplicates,
-Unicode and length boundaries, rejected input, pagination, persistence after
-restart, cascade safety, cancellation, and bounded contention failures.
-
-## Database configuration
-
-- The default database is `metadata.db` under the API project's content root
-  (`src/MetadataApi` for the commands above). Data survives process restarts.
-- Set `Database__Path` to an absolute path to use another location. Use the same
-  value for migration commands and the running server:
-
-  ```powershell
-  $env:Database__Path = Join-Path $PWD "artifacts\local\metadata.db"
-  dotnet ef database update --project src\MetadataApi
-  dotnet run --project src\MetadataApi --launch-profile http
-  ```
-
-- Connections enforce foreign keys and `synchronous=FULL`. Startup establishes
-  and verifies WAL mode. A five-second command/lock timeout bounds database
-  contention; no additional application retry loop is installed.
-- GUID primary keys identify resources. A composite association key prevents
-  duplicate links, and foreign keys cascade parent deletion to links only.
-  Application create requests are validated before persistence.
-- Connection pooling is disabled to keep connection configuration and file
-  cleanup predictable for this single-instance implementation.
-- Keep the database on persistent local storage, not an ephemeral container
-  filesystem or shared network drive. Durability depends on storage honoring
-  synchronization requests. SQLite allows only one writer at a time.
-- Database and journal files are excluded from Git. Migrations and the pinned
-  `dotnet-ef` tool manifest are committed as source configuration.
-
-For a manual backup, stop the API and any other database connections before
-copying the database; retain any remaining WAL file with it. For an online backup,
-use SQLite's backup API or `.backup` command rather than copying a live main file
-alone. Automated backup infrastructure is outside the current scope.
-
-To add a future schema migration after modifying the EF model:
+The E2E suite covers CRUD for both resources, link lifecycle, deletion integrity,
+pagination, validation, authentication, persistence across a server restart, 413
+and 429 (in an isolated low-limit fixture), and the collector smoke test. Tests
+wait for readiness rather than sleeping and use bounded timeouts. They clean up
+processes and temporary databases afterward. Server logs are kept under
+`artifacts/e2e`.
 
 ```powershell
-dotnet ef migrations add DescribeSchemaChange --project src\MetadataApi --output-dir Persistence\Migrations
-```
-
-Review generated migrations for destructive changes before applying them.
-
-## Observability
-
-OpenTelemetry is the production-readiness standout: the API emits safe HTTP server/client
-traces, built-in ASP.NET Core/Kestrel metrics, and JSON console logs correlated by
-`TraceId`/`SpanId` in scopes. `service.name` is `metadata-api`; `service.version` comes
-from the API assembly. No collector, dashboard, or cloud account is required to run it.
-
-**Optional export:** set the standard `OTEL_EXPORTER_OTLP_ENDPOINT` (for example,
-`http://localhost:4317`) to enable OTLP export of traces, metrics, and logs. With no
-endpoint configured there is no exporter or network delivery attempt. The default
-protocol is gRPC; standard OTel exporter settings such as `OTEL_EXPORTER_OTLP_PROTOCOL`
-can select HTTP/protobuf instead. Standard `OTEL_METRIC_EXPORT_INTERVAL` controls the
-metric export interval (milliseconds; the SDK default is 60 seconds).
-
-- `http.server.request.duration` is a histogram: its count gives request count and its
-  buckets give latency. `http.route` uses route templates, not resource IDs or queries.
-- `http.server.active_requests` and Kestrel connection metrics describe concurrent work.
-  Active requests intentionally have no route dimension: routing has not happened yet.
-- The `Microsoft.AspNetCore.RateLimiting` meter is subscribed independently of limiter
-  middleware; its rejected-request measurements appear once rate limiting is enabled.
-- Health endpoints remain measurable but are excluded from traces and completion logs.
-- Existing Problem Details responses contain `traceId` (the W3C Activity ID, containing
-  the trace ID), verified against the exported span. No redundant response header is added.
-
-**Safeguards:** HTTP span tags are allowlisted; raw URLs, queries, headers (including
-Authorization/API keys), request bodies, and maintainer emails are not collected. Safe
-completion logs use method, route template, and status instead of raw paths. Framework
-request/HttpClient informational URL logs and EF command informational logs are suppressed.
-EF Core/SQLite command spans are deliberately **not enabled**, avoiding SQL and parameter
-capture. Do not enable sensitive-data logging or verbose framework diagnostics in production.
-Trace/log batch queues explicitly hold at most 512 records each (128 per batch), with
-one-second batch scheduling/export timeouts and a one-second OTLP timeout. Failed exports
-are dropped/retried by the SDK, never awaited in the request path. Metrics use bounded SDK
-aggregation rather than a per-request export queue.
-
-**Collector proof:** CI starts pinned `otel/opentelemetry-collector-contrib:0.147.0`
-with `.github/otel-collector-config.yaml`, receives OTLP, and writes JSON under
-`artifacts/otel` (uploaded with test results). The E2E smoke issues an authenticated-client
-compatible request for a missing application, extracts Problem Details `traceId`, then
-polls up to 30 seconds for that trace, the route template, and the duration metric in the
-collector file. Locally it skips unless `OTEL_SMOKE_EXPORT_FILE` is set. To opt in, run the
-same collector with its `/data` directory mounted to a local output directory, then set
-`OTEL_SMOKE_EXPORT_FILE` to the host path of `telemetry.json` and `OTEL_SMOKE_ENDPOINT` to
-`http://localhost:4317`; run the E2E project normally. The smoke fixture configures OTLP
-and a one-second metric interval only for its own API process. It uses the fixture's
-`Client` so default authentication headers remain intact.
-
-## Test
-
-```powershell
-dotnet tool restore
-dotnet test MetadataApi.slnx
-```
-
-The unit/integration xUnit project contains:
-
-- In-process API smoke tests using `WebApplicationFactory`: liveness, OpenAPI
-  availability in Development and its absence in Production, and Problem Details
-  for missing routes.
-- Application HTTP tests against real SQLite: complete CRUD, Location headers,
-  replacement/null clearing, unchanged identity and associations, link-only
-  cascade deletion, pagination ordering/defaults/bounds/traversal cap, invalid
-  input, missing resources, OpenAPI metadata, generic 500 errors, and unchanged
-  storage after 503 responses during database contention.
-- Unit tests for Application normalization and validation, including exact length
-  boundaries, SemVer syntax, URL rules, and control characters for create and
-  replacement; pagination boundaries/next offsets and service cancellation.
-- Real SQLite integration tests: migrations, connection settings, persistence
-  after reopening, foreign keys, duplicate links, cascading deletion, rollback,
-  bounded lock contention, and startup rejection of pending migrations.
-
-Tests create isolated temporary databases, apply real migrations, and remove
-their files during cleanup; no manual database setup is required for tests.
-
-The separate [E2E project](tests/MetadataApi.E2E.Tests) starts the built API as a
-real child process running Kestrel in Production mode, applies migrations to its
-own temporary SQLite database, and sends requests over a real loopback TCP port.
-It does not use `WebApplicationFactory`, mock storage, or shared API DTOs.
-
-E2E checks cover complete Application CRUD, Location headers, normalized metadata,
-full replacement and explicit null clearing, duplicate titles, paginated listing,
-validation and JSON errors, 404/415 responses, and persistence of creation,
-replacement, and deletion across API process restarts. Kestrel chooses a free port;
-startup waits for its listening signal and verifies liveness rather than sleeping
-for a fixed duration. Startup is bounded, test HTTP calls have timeouts, and the
-fixture stops its own processes and deletes its temporary database on completion.
-Migration and server logs remain under `artifacts/e2e` for diagnosis.
-
-Run just the real HTTP suite:
-
-```powershell
-dotnet tool restore
+# Real HTTP E2E only
 dotnet test tests\MetadataApi.E2E.Tests\MetadataApi.E2E.Tests.csproj --configuration Release
-```
 
-No manually running server is needed. This command builds the API through a
-build-only project reference; the tests communicate with it exclusively over HTTP.
-
-To collect unit/integration coverage using the included Coverlet collector:
-
-```powershell
+# Unit/integration coverage (Cobertura XML under artifacts\TestResults)
 dotnet test tests\MetadataApi.Tests\MetadataApi.Tests.csproj --collect:"XPlat Code Coverage" --results-directory artifacts\TestResults
 ```
 
-Coverage reports are written as `coverage.cobertura.xml` under the results
-directory. Generated build and test outputs are excluded from Git.
+On Windows, a running Debug API locks its binaries; use `--configuration Release`
+to test alongside it.
 
-On Windows, stop a running Debug API before rebuilding its binaries. To test
-without interrupting that server, use separate Release outputs:
+The [GitHub Actions workflow](.github/workflows/ci.yml) runs on every push and pull
+request:
 
-```powershell
-dotnet test MetadataApi.slnx --configuration Release
-```
+1. Restore and build (SDK pinned by `global.json`).
+2. Run unit and integration tests with Coverlet coverage.
+3. Generate a masked, one-time API key and start the OpenTelemetry collector.
+4. Run the real HTTP E2E suite against the API process.
+5. Publish line and branch coverage to the job summary. Upload test results,
+   coverage, server logs, and collector output, including on failure.
 
-## GitHub Actions
+Runs: [Actions → CI](https://github.com/adrielmsft/aks-hyperscale-metadata-api/actions/workflows/ci.yml)
 
-The [CI workflow](.github/workflows/ci.yml) runs on pushes, pull requests, and
-manual dispatches:
+## Key design decisions
 
-1. Install the SDK selected by `global.json`, restore local tools and packages,
-   and build Release.
-2. Run unit/SQLite integration tests and collect Coverlet coverage.
-3. Run the real HTTP E2E suite, which migrates, starts, exercises, restarts, and
-   stops its own API process.
-4. Write line/branch coverage to the Actions job summary and upload TRX results,
-   Cobertura coverage, and test-only migration/server logs, including on failure.
-
-No cloud deployment, database service, or production credentials are required.
-The API currently has no authentication; tests use only synthetic metadata.
-Logs do not include request bodies or credentials.
-
-See the [Actions workflow page](https://github.com/adrielmsft/aks-hyperscale-metadata-api/actions/workflows/ci.yml).
-A direct link to a successful run must be added here after this workflow is
-pushed and passes on GitHub; local test results alone do not satisfy that
-submission requirement. Extend E2E coverage as the remaining operations and
-production features are implemented.
-
-Commands above use Windows PowerShell paths. On Linux or macOS, use
-`src/MetadataApi` and `artifacts/TestResults` for the corresponding paths, and
-`curl` instead of `curl.exe`.
-
-## Reliability
-
-Middleware runs in this order: exception handling and status-code pages, rate
-limiting and body limits, authentication, then authorization. Unauthenticated
-requests consume the same rate-limit budget, so floods are throttled before
-authentication. Both health probes are anonymous and rate-limit-exempt.
-
-The API uses ASP.NET Core's built-in **global fixed-window rate limiter**: one
-shared budget per API process, **1,000 requests per 60 seconds** by default, with
-**no queue**. All non-health routes share this budget (including invalid
-requests); it is not per-client fairness or distributed throttling. Rejections
-return `429 application/problem+json` with an integer-seconds `Retry-After` when
-the limiter supplies retry metadata. Both `/health/live` and `/health/ready`
-are exempt so probes remain available during overload. The limiter also exposes
-ASP.NET Core's built-in rate-limiting metrics for the observability pipeline.
-
-Request bodies are limited to **65,536 bytes (64 KiB)** by default, comfortably
-above a valid application payload. Middleware checks `Content-Length`, sets the
-server's body-size feature when supported, and reads into a bounded buffer
-**before JSON deserialization**, including chunked/unknown-length bodies.
-Oversized requests return `413 application/problem+json`, not 400 or 500.
-This bounds per-request buffering, not concurrent request count; configure an
-upstream connection/concurrency limit for public deployments.
-
-Configure these startup-validated settings through configuration or environment:
-
-| Setting | Environment variable | Default | Valid range |
-| --- | --- | --- | --- |
-| `RateLimiting:PermitLimit` | `RateLimiting__PermitLimit` | 1000 | 1–2,147,483,647 |
-| `RateLimiting:WindowSeconds` | `RateLimiting__WindowSeconds` | 60 | 1–86,400 seconds |
-| `Limits:MaxRequestBodyBytes` | `Limits__MaxRequestBodyBytes` | 65536 | 1–16,777,216 bytes |
-
-```powershell
-$env:RateLimiting__PermitLimit = "1000"
-$env:RateLimiting__WindowSeconds = "60"
-$env:Limits__MaxRequestBodyBytes = "65536"
-```
-
-Centralized handling maps `BadHttpRequestException` to its HTTP status and
-unexpected exceptions to a generic `500 Internal Server Error` Problem Details
-response, without exception messages, stack traces, or database details. Problem
-Details include a `traceId`; exception details stay in server-side diagnostics.
-Built-in routing supplies `405` and its `Allow` header. SQLite lock contention
-retains the existing bounded five-second wait and `503` response, with no blanket
-write retries. No additional request-timeout policy is installed: the database
-wait remains bounded, and imposing an overall deadline on writes would need
-separate cancellation/commit-outcome tests.
-
-- `GET /health/live`: dependency-free process health, plain-text `Healthy`.
-- `GET /health/ready`: opens and queries the application table through the
-  configured EF Core/SQLite connection; returns `200 Healthy` or `503 Unhealthy`
-  without database diagnostics. Use this endpoint for readiness, not liveness.
-- E2E startup polls readiness for at most 30 seconds. An isolated, serialized
-  low-limit fixture exercises 429 and both known-length/chunked 413 responses
-  against real Kestrel without throttling normal CRUD suites. Test databases
-  stay inside ignored build/artifact directories and are removed on disposal.
+- **Many-to-many links managed as a sub-resource.** Applications and maintainers
+  have independent lifecycles; idempotent `PUT`/`DELETE` on the link path avoids
+  a separate association ID.
+- **GUID IDs, never names in paths.** Titles, names, and emails can change or
+  repeat.
+- **Strict input over lenient input.** Unknown properties and out-of-range
+  pagination values are rejected, not ignored or clamped, so client bugs show up
+  immediately.
+- **Correctness over write throughput.** SQLite runs with `synchronous=FULL`,
+  foreign keys, a bounded lock wait, and no blind retries.
+- **Last-write-wins updates.** Optimistic concurrency (ETags) is a documented
+  non-goal for this scope; transactions protect integrity but not against lost
+  updates.
+- **Offset pagination capped at 10,000.** Simple and predictable for this size; a
+  larger catalog would use cursor pagination.
+- **Shared API key instead of an identity provider.** Secure and standard for a
+  single-tenant service API. Per-client keys or Entra ID/OAuth would be the next
+  step.
+- **Observability that is off by default to export but always safe.**
+  Instrumentation is always on; export is opt-in through standard OTel settings.
+  Privacy is enforced by allowlists rather than denylists.
+- **Out of scope:** PATCH, search, bulk operations, idempotency keys, request
+  timeouts (would need tests of what happens when a write is cancelled mid-commit),
+  distributed rate limiting, dashboards and alerting.
