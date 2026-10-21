@@ -1,6 +1,7 @@
 using System.Text.Json.Serialization;
 using MetadataApi.Authentication;
 using MetadataApi.Endpoints;
+using MetadataApi.OpenApi;
 using MetadataApi.Middleware;
 using MetadataApi.Persistence;
 using MetadataApi.Reliability;
@@ -15,7 +16,7 @@ builder.Services.AddDbContext<MetadataDbContext>(options =>
         builder.Configuration["Database:Path"],
         builder.Environment.ContentRootPath));
 builder.Services.AddApiKeyAuthentication(builder.Configuration);
-builder.Services.AddOpenApi();
+builder.Services.AddMetadataOpenApi();
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<DatabaseExceptionHandler>();
 builder.AddReliability();

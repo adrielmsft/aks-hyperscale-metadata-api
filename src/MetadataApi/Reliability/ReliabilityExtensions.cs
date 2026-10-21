@@ -54,10 +54,10 @@ public static class ReliabilityExtensions
         app.UseRateLimiter();
         app.UseMiddleware<RequestBodyLimitMiddleware>();
         app.MapHealthChecks("/health/live", new HealthCheckOptions { Predicate = _ => false })
-            .DisableRateLimiting().AllowAnonymous();
+            .DisableRateLimiting().AllowAnonymous().ExcludeFromDescription();
         app.MapHealthChecks("/health/ready", new HealthCheckOptions
         {
             Predicate = registration => registration.Tags.Contains("ready")
-        }).DisableRateLimiting().AllowAnonymous();
+        }).DisableRateLimiting().AllowAnonymous().ExcludeFromDescription();
     }
 }

@@ -1,4 +1,5 @@
 using MetadataApi.Contracts;
+using MetadataApi.OpenApi;
 using MetadataApi.Services;
 using MetadataApi.Validation;
 using Microsoft.AspNetCore.Http.HttpResults;
@@ -9,47 +10,37 @@ public static class ApplicationEndpoints
 {
     public static void MapApplications(this WebApplication app)
     {
-        var applications = app.MapGroup("/api/v1/applications").WithTags("Applications");
+        var applications = app.MapGroup("/api/v1/applications").WithTags("Applications").WithApiErrors();
 
         applications.MapPost("", CreateAsync)
             .WithName("CreateApplication")
             .WithSummary("Create an application")
             .WithDescription("Creates metadata with a server-generated ID and no maintainer associations.")
-            .ProducesProblem(StatusCodes.Status415UnsupportedMediaType)
-            .ProducesProblem(StatusCodes.Status500InternalServerError)
-            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
+            .ProducesProblem(StatusCodes.Status415UnsupportedMediaType);
 
         applications.MapGet("/{applicationId}", GetAsync)
             .WithName("GetApplication")
             .WithSummary("Get an application by ID")
             .WithDescription("Returns the stored metadata. Invalid or empty GUIDs return 400; missing applications return 404.")
-            .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status500InternalServerError)
-            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
+            .ProducesProblem(StatusCodes.Status404NotFound);
 
         applications.MapGet("", ListAsync)
             .WithName("ListApplications")
             .WithSummary("List applications")
-            .WithDescription("Returns applications ordered by ID ascending. Limit defaults to 20 (1–100); offset defaults to 0 (0–10000). Invalid values return 400. NextOffset is null at the end or traversal cap; concurrent writes may shift pages.")
-            .ProducesProblem(StatusCodes.Status500InternalServerError)
-            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
+            .WithDescription("Returns applications ordered by ID ascending. Limit defaults to 20 (1–100); offset defaults to 0 (0–10000). Invalid values return 400. NextOffset is null at the end or traversal cap; concurrent writes may shift pages.");
 
         applications.MapPut("/{applicationId}", UpdateAsync)
             .WithName("UpdateApplication")
             .WithSummary("Replace application metadata")
             .WithDescription("Requires title and clears omitted optional fields. ID and maintainer associations remain unchanged. Does not create missing resources. Updates use last-write-wins.")
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status415UnsupportedMediaType)
-            .ProducesProblem(StatusCodes.Status500InternalServerError)
-            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
+            .ProducesProblem(StatusCodes.Status415UnsupportedMediaType);
 
         applications.MapDelete("/{applicationId}", DeleteAsync)
             .WithName("DeleteApplication")
             .WithSummary("Delete an application")
             .WithDescription("Deletes the application and its association links only, never maintainers. Missing resources, including repeat deletions, return 404.")
-            .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status500InternalServerError)
-            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
+            .ProducesProblem(StatusCodes.Status404NotFound);
     }
 
     private static async Task<Results<Created<ApplicationResponse>, ValidationProblem>> CreateAsync(
