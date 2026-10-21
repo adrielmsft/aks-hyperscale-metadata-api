@@ -22,6 +22,7 @@ public sealed class ApiServerFixture : IAsyncLifetime
     private TextWriter? serverLog;
     private HttpClient? client;
     private int startCount;
+    private readonly object traceLock = new();
 
     public ApiServerFixture() : this(new Dictionary<string, string>()) { }
 
@@ -33,11 +34,19 @@ public sealed class ApiServerFixture : IAsyncLifetime
     public HttpClient Client => client
         ?? throw new InvalidOperationException("The E2E server has not started.");
 
-    public HttpClient CreateUnauthenticatedClient() => new()
+    public HttpClient CreateUnauthenticatedClient() => new(CreateTraceHandler())
     {
         BaseAddress = Client.BaseAddress,
         Timeout = Client.Timeout
     };
+
+    private HttpTraceHandler CreateTraceHandler() => new(line =>
+    {
+        lock (traceLock)
+        {
+            File.AppendAllText(Path.Combine(LogDirectory, "http-trace.log"), line + Environment.NewLine);
+        }
+    });
 
     private string LogDirectory => Path.Combine(root, "artifacts", "e2e", runId);
 
@@ -203,7 +212,11 @@ public sealed class ApiServerFixture : IAsyncLifetime
 
         // Port zero lets Kestrel select a free port without racing another process.
         var baseAddress = await listening.Task.WaitAsync(TimeSpan.FromSeconds(30));
-        client = new HttpClient { BaseAddress = baseAddress, Timeout = TimeSpan.FromSeconds(15) };
+        client = new HttpClient(CreateTraceHandler())
+        {
+            BaseAddress = baseAddress,
+            Timeout = TimeSpan.FromSeconds(15)
+        };
         client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
         using var readinessTimeout = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         try
