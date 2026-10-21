@@ -242,8 +242,7 @@ rate limiting.
 
 ### ⭐ Observability (highlighted feature)
 
-OpenTelemetry traces, metrics, and logs, designed to be safe by default and
-optional to export.
+OpenTelemetry traces, metrics, and logs. This supports observability into our services to enable use to debug production failures, alert us of service unhealthiness, and create service dashboards in the future.
 
 - **Traces:** one server span per request (health probes excluded). A tag
   allowlist keeps only method, status, route template, protocol, error type, and
@@ -273,6 +272,8 @@ optional to export.
 
 ### Authentication
 
+Authentication allows us gatekeep our API to a few select callers such as trusted users or services.
+
 - A single shared API key, sent as `Authorization: Bearer <key>` and configured
   through `Authentication:ApiKey` (environment variable `Authentication__ApiKey`).
   Startup fails if the key is missing, blank, or shorter than 32 characters.
@@ -286,6 +287,8 @@ optional to export.
   key in a secret store, and require HTTPS for any public deployment.
 
 ### Reliability
+
+For reliability, we implemented configurable rate limiting, body request size limits, health probes, input validation, etc. to resolve or prevent issues and detect issues early. Overall these make our service more robust to transient failures or at least allow us to address them quickly.
 
 | Setting | Environment variable | Default |
 | --- | --- | --- |
@@ -313,6 +316,8 @@ Middleware order: observability → exception handling → rate limiting and bod
 limits → authentication → authorization → endpoints.
 
 ## Storage
+
+For the purposes of this project, we went with an embedded SQLite database, interfaced via EF core. Using an embedded database over an external one was primarily due to time constraints. EF core is .NET's official ORM, so naturally we'd use that the interface with our database.
 
 **File-backed SQLite via EF Core**, sized for a single API instance on one machine.
 
@@ -429,22 +434,8 @@ Runs: [Actions → CI](https://github.com/adrielmsft/aks-hyperscale-metadata-api
   a separate association ID.
 - **GUID IDs, never names in paths.** Titles, names, and emails can change or
   repeat.
-- **Strict input over lenient input.** Unknown properties and out-of-range
-  pagination values are rejected, not ignored or clamped, so client bugs show up
-  immediately.
 - **Correctness over write throughput.** SQLite runs with `synchronous=FULL`,
   foreign keys, a bounded lock wait, and no blind retries.
-- **Last-write-wins updates.** Optimistic concurrency (ETags) is a documented
-  non-goal for this scope; transactions protect integrity but not against lost
-  updates.
-- **Offset pagination capped at 10,000.** Simple and predictable for this size; a
-  larger catalog would use cursor pagination.
-- **Shared API key instead of an identity provider.** Secure and standard for a
-  single-tenant service API. Per-client keys or Entra ID/OAuth would be the next
-  step.
-- **Observability that is off by default to export but always safe.**
-  Instrumentation is always on; export is opt-in through standard OTel settings.
-  Privacy is enforced by allowlists rather than denylists.
-- **Out of scope:** PATCH, search, bulk operations, idempotency keys, request
-  timeouts (would need tests of what happens when a write is cancelled mid-commit),
-  distributed rate limiting, dashboards and alerting.
+- **Last-write-wins updates.** Simple last-write-wins over optimistic concurrency due to time constraints and low risk of conflict for this type of data.
+- **Offset pagination vs. Cursor pagination** Went with offset due to simplicity and modest scale requirements.
+- **Shared API key** Assumes API is only called by a few trusted services. Quick to implement given time constraints, but next step would be to support per-client keys or use an identity provider if the API needs to be used at a large scale.

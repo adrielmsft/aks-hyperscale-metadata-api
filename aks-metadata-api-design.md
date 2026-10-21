@@ -1,5 +1,5 @@
 ## Background
-You are to implement a metadata API server. This is simply an API to manage two distinct resources: Application and Maintainer. Maintainers are users that manage Application. They can perform operations on these applications such as creation, deletion, get, and update. Maintainers can themselves are managed via the same operations. This can be a small business application, where internal users want to maange their applications. But it can also be a large scale application, (for example Github), where we need to support hundreds of millions of maintainers and applications. For the purposes of this task, we will be using .NET and C#.
+You are to implement a metadata API server. This is simply an API to manage two distinct resources: Application and Maintainer. Maintainers are users that manage Application. They can perform operations on these applications such as creation, deletion, get, and update. Maintainers can themselves are managed via the same operations. For this project, we will be using ASP.NET and C#.
 
 ## Scope
 A RESTful HTTP API that enables CRUD operations for Application and Maintainer resources and management of their many-to-many associations. Both resources receive server-generated IDs. Maintainers are contact metadata, not authenticated identities. A single configured API key grants clients administrative access to all resources; per-maintainer authorization is out of scope.
@@ -19,7 +19,6 @@ Notes:
 - Id is a server-generated Guid assigned on creation and remains unchanged when application metadata changes.
 - Maintainers are linked through ApplicationMaintainer using their stable IDs.
 - Creation uses POST and is not idempotent; generated IDs do not prevent duplicate records on retries. Idempotency keys are out of scope.
-- **May need to add additional fields depending on production readiness needs?**
 
 type Application struct {
     Id              Guid
