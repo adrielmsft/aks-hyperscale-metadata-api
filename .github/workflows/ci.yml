@@ -29,10 +29,14 @@ jobs:
           dotnet tool restore
           dotnet restore MetadataApi.slnx
 
-      - name: Build
+      - name: Build Release API and test suites
+        id: build
         run: dotnet build MetadataApi.slnx --configuration Release --no-restore
 
-      - name: Unit and SQLite integration tests with coverage
+      - name: Test evidence renderer (summary and annotation safety)
+        run: python3 -B -m unittest discover -s .github/scripts -p 'test_test_summary.py' -v
+
+      - name: Unit & SQLite integration - test contracts and report coverage
         run: >-
           dotnet test tests/MetadataApi.Tests/MetadataApi.Tests.csproj
           --configuration Release --no-build
@@ -41,6 +45,7 @@ jobs:
           --results-directory artifacts/unit-integration
 
       - name: Generate ephemeral E2E API key
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         id: api-key
         shell: bash
         run: |
@@ -49,6 +54,7 @@ jobs:
           echo "key=$key" >> "$GITHUB_OUTPUT"
 
       - name: Start OpenTelemetry collector
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: |
           mkdir -p artifacts/otel
           chmod 777 artifacts/otel
@@ -65,7 +71,8 @@ jobs:
           (echo > /dev/tcp/127.0.0.1/4317) 2>/dev/null
           test "$(docker inspect -f '{{.State.Running}}' metadata-otel)" = true
 
-      - name: Real HTTP E2E (migrate, start Kestrel, test, restart, clean up)
+      - name: "E2E: start real API process & run HTTP tests (including restart and limits)"
+        if: ${{ !cancelled() && steps.build.outcome == 'success' && steps.api-key.outcome == 'success' }}
         env:
           Authentication__ApiKey: ${{ steps.api-key.outputs.key }}
           OTEL_SMOKE_EXPORT_FILE: ${{ github.workspace }}/artifacts/otel/telemetry.json
@@ -84,34 +91,18 @@ jobs:
           docker stop --time 10 metadata-otel || true
           docker rm metadata-otel || true
 
-      - name: Report coverage
+      # TRX + stdout annotations work for push and fork PRs with contents: read only.
+      - name: Summarize every test, real HTTP traffic, and assembly/class coverage
         if: always()
-        shell: pwsh
-        run: |
-          if (-not (Test-Path artifacts/unit-integration)) {
-            throw "The unit/integration results directory was not generated."
-          }
-          $report = Get-ChildItem artifacts/unit-integration -Filter coverage.cobertura.xml -Recurse | Select-Object -First 1
-          if (-not $report) {
-            throw "The unit/integration coverage report was not generated."
-          }
-          [xml]$coverage = Get-Content -LiteralPath $report.FullName -Raw
-          $lines = [math]::Round(100 * [double]$coverage.coverage.'line-rate', 2)
-          $branches = [math]::Round(100 * [double]$coverage.coverage.'branch-rate', 2)
-          @"
-          ## Unit and integration coverage
-          | Metric | Coverage |
-          | --- | --- |
-          | Lines | $lines% |
-          | Branches | $branches% |
-          "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Append
+        run: python3 .github/scripts/test_summary.py
 
-      - name: Upload test results, coverage, and server logs
+      - name: Upload TRX, coverage, HTTP traces, server logs, and collector output
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: test-results
           path: |
+            artifacts/test-summary.md
             artifacts/unit-integration
             artifacts/e2e-results
             artifacts/e2e
