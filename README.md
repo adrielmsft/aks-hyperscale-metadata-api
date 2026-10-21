@@ -5,7 +5,7 @@ metadata and the many-to-many links between them. Data is stored in file-backed
 SQLite through EF Core. See the [design document](aks-metadata-api-design.md) for
 the full requirements, validation scheme, and rationale.
 
-[![CI](https://github.com/adrielmsft/aks-hyperscale-metadata-api/actions/workflows/ci.yml/badge.svg)](https://github.com/adrielmsft/aks-hyperscale-metadata-api/actions/workflows/ci.yml)
+[![CI](https://github.com/adrielmsft/aks-hyperscale-metadata-api/actions/workflows/ci.yml/badge.svg)](https://github.com/adrielmsft/aks-hyperscale-metadata-api/actions/runs/39537604052)
 
 ## Contents
 
