@@ -47,7 +47,7 @@ future resource endpoints. Missing/invalid credentials return the same `401`
 resource lookup. Keys are compared using constant-time SHA-256 hash comparison.
 The default/fallback authorization policy protects new endpoints automatically;
 new health endpoints must explicitly call `.AllowAnonymous()`. `/health/live`
-and the Development-only `/openapi/v1.json` document are explicitly anonymous.
+and `/health/ready`, plus the Development-only `/openapi/v1.json` document, are explicitly anonymous.
 
 For the PowerShell resource examples below, supply `-Headers $headers` on each
 `Invoke-RestMethod` call:
@@ -431,3 +431,60 @@ production features are implemented.
 Commands above use Windows PowerShell paths. On Linux or macOS, use
 `src/MetadataApi` and `artifacts/TestResults` for the corresponding paths, and
 `curl` instead of `curl.exe`.
+
+## Reliability
+
+Middleware runs in this order: exception handling and status-code pages, rate
+limiting and body limits, authentication, then authorization. Unauthenticated
+requests consume the same rate-limit budget, so floods are throttled before
+authentication. Both health probes are anonymous and rate-limit-exempt.
+
+The API uses ASP.NET Core's built-in **global fixed-window rate limiter**: one
+shared budget per API process, **1,000 requests per 60 seconds** by default, with
+**no queue**. All non-health routes share this budget (including invalid
+requests); it is not per-client fairness or distributed throttling. Rejections
+return `429 application/problem+json` with an integer-seconds `Retry-After` when
+the limiter supplies retry metadata. Both `/health/live` and `/health/ready`
+are exempt so probes remain available during overload. The limiter also exposes
+ASP.NET Core's built-in rate-limiting metrics for the observability pipeline.
+
+Request bodies are limited to **65,536 bytes (64 KiB)** by default, comfortably
+above a valid application payload. Middleware checks `Content-Length`, sets the
+server's body-size feature when supported, and reads into a bounded buffer
+**before JSON deserialization**, including chunked/unknown-length bodies.
+Oversized requests return `413 application/problem+json`, not 400 or 500.
+This bounds per-request buffering, not concurrent request count; configure an
+upstream connection/concurrency limit for public deployments.
+
+Configure these startup-validated settings through configuration or environment:
+
+| Setting | Environment variable | Default | Valid range |
+| --- | --- | --- | --- |
+| `RateLimiting:PermitLimit` | `RateLimiting__PermitLimit` | 1000 | 1–2,147,483,647 |
+| `RateLimiting:WindowSeconds` | `RateLimiting__WindowSeconds` | 60 | 1–86,400 seconds |
+| `Limits:MaxRequestBodyBytes` | `Limits__MaxRequestBodyBytes` | 65536 | 1–16,777,216 bytes |
+
+```powershell
+$env:RateLimiting__PermitLimit = "1000"
+$env:RateLimiting__WindowSeconds = "60"
+$env:Limits__MaxRequestBodyBytes = "65536"
+```
+
+Centralized handling maps `BadHttpRequestException` to its HTTP status and
+unexpected exceptions to a generic `500 Internal Server Error` Problem Details
+response, without exception messages, stack traces, or database details. Problem
+Details include a `traceId`; exception details stay in server-side diagnostics.
+Built-in routing supplies `405` and its `Allow` header. SQLite lock contention
+retains the existing bounded five-second wait and `503` response, with no blanket
+write retries. No additional request-timeout policy is installed: the database
+wait remains bounded, and imposing an overall deadline on writes would need
+separate cancellation/commit-outcome tests.
+
+- `GET /health/live`: dependency-free process health, plain-text `Healthy`.
+- `GET /health/ready`: opens and queries the application table through the
+  configured EF Core/SQLite connection; returns `200 Healthy` or `503 Unhealthy`
+  without database diagnostics. Use this endpoint for readiness, not liveness.
+- E2E startup polls readiness for at most 30 seconds. An isolated, serialized
+  low-limit fixture exercises 429 and both known-length/chunked 413 responses
+  against real Kestrel without throttling normal CRUD suites. Test databases
+  stay inside ignored build/artifact directories and are removed on disposal.

@@ -1,8 +1,12 @@
 @MetadataApi_HostAddress = http://localhost:5108
 @apiKey = {{$processEnv Authentication__ApiKey}}
 
-### Liveness (process health only; no database checks yet)
+### Liveness (dependency-free process health)
 GET {{MetadataApi_HostAddress}}/health/live
+Accept: text/plain
+
+### Readiness (queries SQLite; 503 when unavailable)
+GET {{MetadataApi_HostAddress}}/health/ready
 Accept: text/plain
 
 ### OpenAPI document (Development only)
