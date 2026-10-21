@@ -263,12 +263,18 @@ OpenTelemetry traces, metrics, and logs. This supports observability into our se
   emails are never collected. Export queues are bounded (512 items, 128 per
   batch) with one-second timeouts, and failed exports never block or fail
   requests (verified by a test that points at an unreachable endpoint).
-- **Proven end to end:** CI runs a pinned `otel/opentelemetry-collector-contrib:0.147.0`
-  ([config](.github/otel-collector-config.yaml)). An E2E test sends a real request,
-  takes the `traceId` from the response, and waits until that trace and the
-  request-duration metric appear in the collector's output. Locally, the test is
-  skipped unless `OTEL_SMOKE_EXPORT_FILE` (collector output file) and
-  `OTEL_SMOKE_ENDPOINT` are set.
+- **Proven end to end:**
+  [`ObservabilityE2ETests.Collector_ReceivesRequestTraceAndDurationMetric`](tests/MetadataApi.E2E.Tests/ObservabilityE2ETests.cs)
+  starts the real API with `OTEL_EXPORTER_OTLP_ENDPOINT` pointed at a pinned
+  `otel/opentelemetry-collector-contrib:0.147.0` collector in CI
+  ([config](.github/otel-collector-config.yaml)). It sends
+  `GET /api/v1/applications/{random-id}`, expects a 404, and reads the `traceId`
+  from the Problem Details body. It then polls the collector's export file for up
+  to 30 seconds until three things appear: that exact trace ID, the
+  `http.server.request.duration` metric, and the route template
+  `/api/v1/applications/{applicationId}`. Locally, the test is skipped unless
+  `OTEL_SMOKE_EXPORT_FILE` (collector output file) and `OTEL_SMOKE_ENDPOINT` are
+  set.
 
 ### Authentication
 
@@ -288,7 +294,7 @@ Authentication allows us gatekeep our API to a few select callers such as truste
 
 ### Reliability
 
-For reliability, we implemented configurable rate limiting, body request size limits, health probes, input validation, etc. to resolve or prevent issues and detect issues early. Overall these make our service more robust to transient failures or at least allow us to address them quickly.
+For reliability, we implemented configurable rate limiting, body request size limits, health probes, input validation, etc. to automatically resolve or prevent issues. Overall these make our service more robust to failures.
 
 | Setting | Environment variable | Default |
 | --- | --- | --- |
@@ -311,9 +317,6 @@ All settings are validated at startup.
 - **Health probes:** separate liveness and readiness endpoints for orchestrators.
 - **Input validation:** strict JSON, field rules, and GUID/pagination validation
   at the API boundary. All field errors are reported together.
-
-Middleware order: observability → exception handling → rate limiting and body
-limits → authentication → authorization → endpoints.
 
 ## Storage
 
@@ -388,9 +391,7 @@ request:
 5. Publish test evidence and upload artifacts, **even on failure**. E2E still runs
    after a unit-test failure if the Release build succeeded.
 
-**Where exam reviewers should look:** open a run and check its green job status
-(the summary is evidence, not a substitute for a successful run). The job summary
-contains:
+The job summary contains:
 
 - **Unit & SQLite integration** and **Real HTTP E2E (Kestrel process)**: every
   discovered test case grouped by class, including theory cases, with pass/fail/skip
@@ -422,15 +423,17 @@ Runs: [Actions → CI](https://github.com/adrielmsft/aks-hyperscale-metadata-api
 
 ## Key design decisions
 
-- **Many-to-many links managed as a sub-resource.** Applications and maintainers
-  have independent lifecycles; idempotent `PUT`/`DELETE` on the link path avoids
-  a separate association ID.
-- **GUID IDs, never names in paths.** Titles, names, and emails can change or
-  repeat.
+- **Separate data model for the Maintainer–Application relationship.** A
+  dedicated `ApplicationMaintainers` table (composite key
+  `(ApplicationId, MaintainerId)`) links the two resources instead of embedding
+  maintainers in each application. This supports many-to-many relationships and keeps the
+  relationship separate from each resource's properties.
+- **GUID IDs, never names in paths.** Titles and names can change or
+  repeat. Having a generated GUID guarantees uniqueness.
 - **Correctness over write throughput.** SQLite runs with `synchronous=FULL`,
-  foreign keys, a bounded lock wait, and no blind retries.
-- **Last-write-wins updates.** Simple last-write-wins over optimistic concurrency due to time constraints and low risk of conflict for this type of data.
-- **Offset pagination vs. Cursor pagination** Went with offset due to simplicity and modest scale requirements.
+  foreign keys, a bounded lock wait, and no blind retries. This assumes the nature of this application isn't time-sensitive and correctness is essential.
+- **Last-write-wins updates.** Simple last-write-wins over optimistic concurrency due to time constraints and assumption of low risk of conflict for this type of data.
+- **Offset pagination vs. Cursor pagination** Went with offset due to simplicity and assuming modest scale requirements.
 - **Shared API key** Assumes API is only called by a few trusted services. Quick to implement given time constraints, but next step would be to support per-client keys or use an identity provider if the API needs to be used at a large scale.
 
 ## Cost
