@@ -333,14 +333,23 @@ pagination, validation, authentication, persistence across a server restart, 413
 and 429 (in an isolated low-limit fixture), and the collector smoke test. Tests
 wait for readiness rather than sleeping and use bounded timeouts. They clean up
 processes and temporary databases afterward. Server logs are kept under
-`artifacts/e2e`.
+`artifacts/e2e/<run>/`. Each fixture's `http-trace.log` records every real request
+(including unauthenticated clients, readiness checks, restarts, and low-limit tests):
+method, path + query, response status, and elapsed milliseconds to response headers.
+Transport failures are marked `ERROR`. Traces never inspect headers or bodies, so
+Authorization/API keys and maintainer email bodies are excluded. These traces are
+per fixture rather than per test because clients are shared across tests.
 
 ```powershell
-# Real HTTP E2E only
-dotnet test tests\MetadataApi.E2E.Tests\MetadataApi.E2E.Tests.csproj --configuration Release
+dotnet tool restore
+dotnet build MetadataApi.slnx --configuration Release
 
-# Unit/integration coverage (Cobertura XML under artifacts\TestResults)
-dotnet test tests\MetadataApi.Tests\MetadataApi.Tests.csproj --collect:"XPlat Code Coverage" --results-directory artifacts\TestResults
+# Same TRX loggers and output locations as CI (start with an empty artifacts directory).
+dotnet test tests\MetadataApi.Tests\MetadataApi.Tests.csproj --configuration Release --no-build --collect:"XPlat Code Coverage" --logger "trx;LogFileName=unit-integration.trx" --results-directory artifacts\unit-integration
+dotnet test tests\MetadataApi.E2E.Tests\MetadataApi.E2E.Tests.csproj --configuration Release --no-build --logger "trx;LogFileName=e2e.trx" --results-directory artifacts\e2e-results
+
+# Python 3, standard library only; writes artifacts\test-summary.md locally.
+python .github\scripts\test_summary.py
 ```
 
 On Windows, a running Debug API locks its binaries; use `--configuration Release`
@@ -353,8 +362,38 @@ request:
 2. Run unit and integration tests with Coverlet coverage.
 3. Generate a masked, one-time API key and start the OpenTelemetry collector.
 4. Run the real HTTP E2E suite against the API process.
-5. Publish line and branch coverage to the job summary. Upload test results,
-   coverage, server logs, and collector output, including on failure.
+5. Publish test evidence and upload artifacts, **even on failure**. E2E still runs
+   after a unit-test failure if the Release build succeeded.
+
+**Where exam reviewers should look:** open a run and check its green job status
+(the summary is evidence, not a substitute for a successful run). The job summary
+contains:
+
+- **Unit & SQLite integration** and **Real HTTP E2E (Kestrel process)**: every
+  discovered test case grouped by class, including theory cases, with pass/fail/skip
+  and duration. xUnit configuration turns method underscores into spaces without
+  mass-renaming tests. The collector smoke test runs in CI; locally it is explicitly
+  skipped unless `OTEL_SMOKE_EXPORT_FILE` and `OTEL_SMOKE_ENDPOINT` point to a running
+  collector configured like [the CI collector](.github/otel-collector-config.yaml).
+- **E2E HTTP coverage (observed real requests)**: endpoint templates (GUIDs →
+  `{id}`), observed status counts (including 401/404/413/415/429), and total requests.
+  Query variants are grouped by path. This is real traffic evidence, not a claim of
+  exhaustive endpoint/error coverage; the per-test assertions establish behavior.
+- **Unit and integration coverage**: total line/branch percentages plus a
+  per-assembly/per-class breakdown from Coverlet's Cobertura report.
+
+Failures also appear as **Actions error annotations**, with the suite, class,
+test name, and failure details. Missing report files are reported explicitly.
+The **test-results** artifact retains TRX, raw Cobertura, the rendered
+`test-summary.md`, per-fixture HTTP/migration/server logs, and collector telemetry
+and logs for seven days. Raw HTTP traces retain query strings; do not add secrets
+to request URLs.
+
+Reporting uses the built-in VSTest TRX logger and a small Python standard-library
+renderer, rather than a check-writing action or third-party logger. This needs no
+extra NuGet packages, external service, secrets, or `checks: write` permission, and
+works unchanged on push and fork pull requests with `contents: read`. No external
+coverage badge is used. The workflow does not grant elevated PR permissions.
 
 Runs: [Actions → CI](https://github.com/adrielmsft/aks-hyperscale-metadata-api/actions/workflows/ci.yml)
 
