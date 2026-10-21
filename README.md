@@ -18,25 +18,55 @@ the full requirements, validation scheme, and rationale.
 
 ## Quick start
 
-Prerequisites: [.NET SDK 10.0.402](https://dotnet.microsoft.com/download/dotnet/10.0)
-(or a newer 10.0.4xx patch; pinned in `global.json`) and Git. No database service,
-cloud account, or committed secrets are needed.
+The only prerequisite is Git plus PowerShell, which is built into Windows; on
+Linux/macOS install [PowerShell 7](https://learn.microsoft.com/powershell/scripting/install/installing-powershell).
+No database service, cloud account, or committed secrets are needed.
 
-From the repository root in PowerShell:
+From the repository root, run [quickstart.ps1](quickstart.ps1):
 
 ```powershell
-# 1. Generate a local API key (required; at least 32 characters)
-$env:Authentication__ApiKey = [Convert]::ToHexString([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
+# Windows
+powershell -ExecutionPolicy Bypass -File .\quickstart.ps1
 
-# 2. Restore, build, create the database, and run
+# Linux / macOS
+pwsh ./quickstart.ps1
+```
+
+The script:
+
+1. Uses the .NET SDK pinned in `global.json` (10.0.402 or a newer 10.0.4xx patch).
+   If it isn't installed, the script installs it into the git-ignored `.dotnet/`
+   folder using Microsoft's official `dotnet-install` script; the system-wide
+   SDK is left untouched.
+2. Restores the local `dotnet-ef` tool and NuGet packages and builds the solution.
+3. Creates or updates the SQLite database (`src/MetadataApi/metadata.db`) by
+   applying migrations.
+4. Reuses `Authentication__ApiKey` if it is set; otherwise generates a random key
+   for this session.
+5. Starts the API at `http://localhost:5108` and prints the key and ready-to-paste
+   example requests. Press Ctrl+C to stop.
+
+Options: `-Test` runs every test suite instead of starting the API, `-SetupOnly`
+installs, builds, and migrates without starting it, and `-Port <n>` uses a
+different port. The script stops with a clear message if the port is already in use.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\quickstart.ps1 -Test
+```
+
+### Manual setup
+
+With the SDK already installed (key generation below requires PowerShell 7+):
+
+```powershell
+$env:Authentication__ApiKey = [Convert]::ToHexString([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
 dotnet tool restore
 dotnet build MetadataApi.slnx
 dotnet ef database update --project src\MetadataApi
 dotnet run --project src\MetadataApi --launch-profile http
 ```
 
-The API listens at `http://localhost:5108`. In another terminal, set
-`$env:Authentication__ApiKey` to the same key, then run:
+Then, from another terminal with the same `Authentication__ApiKey`:
 
 ```powershell
 $headers = @{ Authorization = "Bearer $env:Authentication__ApiKey" }
@@ -45,12 +75,8 @@ Invoke-RestMethod -Uri "http://localhost:5108/api/v1/applications/$($app.id)" -H
 curl.exe --fail http://localhost:5108/health/ready
 ```
 
-Run all tests (unit, SQLite integration, and real-HTTP E2E):
-
-```powershell
-dotnet tool restore
-dotnet test MetadataApi.slnx --configuration Release
-```
+Run all tests manually with `dotnet tool restore` followed by
+`dotnet test MetadataApi.slnx --configuration Release`.
 
 [MetadataApi.http](src/MetadataApi/MetadataApi.http) contains ready-made successful
 and failing requests; it reads the key from the `Authentication__ApiKey` environment
