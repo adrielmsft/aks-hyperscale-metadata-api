@@ -84,7 +84,32 @@ variable. On Linux/macOS, use `/` path separators and `curl` instead of `curl.ex
 
 ## API reference
 
-In Development, the OpenAPI document is served at `GET /openapi/v1.json`.
+The committed [OpenAPI reference](docs/openapi.json) covers all 14 API operations,
+request/response schemas, Bearer authentication, pagination, and error responses.
+It lives in `docs/` so reviewers can browse it without running the service; optionally
+import the file into [Swagger Editor](https://editor.swagger.io/) for an interactive view.
+In Development, the same document is served anonymously at `GET /openapi/v1.json`;
+production exposure is unchanged. Anonymous health probes are excluded (see below).
+
+The `OpenApiTests` snapshot test compares the live generated document to the committed
+file on every normal test run, including CI. JSON object ordering and whitespace do not
+affect comparison; the document uses relative server URLs for portability. No build-time
+app startup, real credentials, or developer database are needed: the test factory uses
+an isolated SQLite test database and a dummy key. After changing the API, regenerate
+from the repository root in PowerShell, review the diff, and commit the updated file:
+
+```powershell
+$env:UPDATE_OPENAPI_SNAPSHOT = '1'
+try {
+    dotnet test tests\MetadataApi.Tests -c Release --filter FullyQualifiedName~OpenApiTests
+} finally {
+    Remove-Item Env:UPDATE_OPENAPI_SNAPSHOT
+}
+```
+
+Regeneration is disabled when `CI` is set, so CI cannot silently accept a stale spec.
+405 is documented as a routing-level error in the spec description, not as a response
+of an otherwise supported operation; 415 applies only to JSON-body operations.
 
 ### Conventions
 

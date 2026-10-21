@@ -1,4 +1,5 @@
 using MetadataApi.Contracts;
+using MetadataApi.OpenApi;
 using MetadataApi.Services;
 using MetadataApi.Validation;
 using Microsoft.AspNetCore.Http.HttpResults;
@@ -9,39 +10,31 @@ public static class ApplicationMaintainerEndpoints
 {
     public static void MapApplicationMaintainers(this WebApplication app)
     {
-        var associations = app.MapGroup("/api/v1").WithTags("Associations");
+        var associations = app.MapGroup("/api/v1").WithTags("Associations").WithApiErrors();
 
         associations.MapPut("/applications/{applicationId}/maintainers/{maintainerId}", EnsureAsync)
             .WithName("EnsureApplicationMaintainer")
             .WithSummary("Ensure an application-maintainer association exists")
             .WithDescription("No request body. Returns 204 even if the link already exists, including concurrent duplicate requests. Both resources must exist.")
-            .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status500InternalServerError)
-            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
+            .ProducesProblem(StatusCodes.Status404NotFound);
 
         associations.MapDelete("/applications/{applicationId}/maintainers/{maintainerId}", RemoveAsync)
             .WithName("RemoveApplicationMaintainer")
             .WithSummary("Ensure an application-maintainer association is absent")
             .WithDescription("No request body. Returns 204 even if the link is absent. Both resources must exist; neither is deleted.")
-            .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status500InternalServerError)
-            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
+            .ProducesProblem(StatusCodes.Status404NotFound);
 
         associations.MapGet("/applications/{applicationId}/maintainers", ListMaintainersAsync)
             .WithName("ListApplicationMaintainers")
             .WithSummary("List an application's maintainers")
             .WithDescription("Returns maintainer resources ordered by ID ascending. Limit defaults to 20 (1–100); offset defaults to 0 (0–10000). Invalid values return 400; missing parents return 404. NextOffset is null at the end or traversal cap; concurrent writes may shift pages.")
-            .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status500InternalServerError)
-            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
+            .ProducesProblem(StatusCodes.Status404NotFound);
 
         associations.MapGet("/maintainers/{maintainerId}/applications", ListApplicationsAsync)
             .WithName("ListMaintainerApplications")
             .WithSummary("List a maintainer's applications")
             .WithDescription("Returns application resources ordered by ID ascending. Limit defaults to 20 (1–100); offset defaults to 0 (0–10000). Invalid values return 400; missing parents return 404. NextOffset is null at the end or traversal cap; concurrent writes may shift pages.")
-            .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status500InternalServerError)
-            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
+            .ProducesProblem(StatusCodes.Status404NotFound);
     }
 
     private static async Task<Results<NoContent, ValidationProblem, ProblemHttpResult>> EnsureAsync(

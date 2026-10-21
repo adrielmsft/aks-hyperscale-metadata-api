@@ -1,5 +1,6 @@
 using System.Globalization;
 using MetadataApi.Contracts;
+using MetadataApi.OpenApi;
 using MetadataApi.Services;
 using MetadataApi.Validation;
 using Microsoft.AspNetCore.Http.HttpResults;
@@ -10,47 +11,37 @@ public static class MaintainerEndpoints
 {
     public static void MapMaintainers(this WebApplication app)
     {
-        var maintainers = app.MapGroup("/api/v1/maintainers").WithTags("Maintainers");
+        var maintainers = app.MapGroup("/api/v1/maintainers").WithTags("Maintainers").WithApiErrors();
 
         maintainers.MapPost("", CreateAsync)
             .WithName("CreateMaintainer")
             .WithSummary("Create a maintainer")
             .WithDescription("Creates contact metadata with a server-generated ID. Duplicate names and emails are allowed.")
-            .ProducesProblem(StatusCodes.Status415UnsupportedMediaType)
-            .ProducesProblem(StatusCodes.Status500InternalServerError)
-            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
+            .ProducesProblem(StatusCodes.Status415UnsupportedMediaType);
 
         maintainers.MapGet("", ListAsync)
             .WithName("ListMaintainers")
             .WithSummary("List a bounded page of maintainers")
-            .WithDescription("Orders by ID ascending. Limit defaults to 20 (1–100); offset defaults to 0 (0–10000).")
-            .ProducesProblem(StatusCodes.Status500InternalServerError)
-            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
+            .WithDescription("Orders by ID ascending. Limit defaults to 20 (1–100); offset defaults to 0 (0–10000).");
 
         maintainers.MapGet("/{maintainerId}", GetAsync)
             .WithName("GetMaintainer")
             .WithSummary("Get a maintainer by ID")
             .WithDescription("Invalid or empty GUIDs return 400; missing maintainers return 404.")
-            .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status500InternalServerError)
-            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
+            .ProducesProblem(StatusCodes.Status404NotFound);
 
         maintainers.MapPut("/{maintainerId}", UpdateAsync)
             .WithName("UpdateMaintainer")
             .WithSummary("Replace a maintainer's name and email")
             .WithDescription("Both fields are required. The ID and application associations remain unchanged. Last write wins.")
             .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status415UnsupportedMediaType)
-            .ProducesProblem(StatusCodes.Status500InternalServerError)
-            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
+            .ProducesProblem(StatusCodes.Status415UnsupportedMediaType);
 
         maintainers.MapDelete("/{maintainerId}", DeleteAsync)
             .WithName("DeleteMaintainer")
             .WithSummary("Delete a maintainer")
             .WithDescription("Deletes the maintainer and its association rows, never the linked applications. Missing maintainers return 404.")
-            .ProducesProblem(StatusCodes.Status404NotFound)
-            .ProducesProblem(StatusCodes.Status500InternalServerError)
-            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
+            .ProducesProblem(StatusCodes.Status404NotFound);
     }
 
     private static async Task<Results<Created<MaintainerResponse>, ValidationProblem>> CreateAsync(
