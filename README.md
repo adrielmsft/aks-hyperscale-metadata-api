@@ -317,25 +317,18 @@ limits → authentication → authorization → endpoints.
 
 ## Storage
 
-For the purposes of this project, we went with an embedded SQLite database, interfaced via EF core. Using an embedded database over an external one was primarily due to time constraints. EF core is .NET's official ORM, so naturally we'd use that the interface with our database.
+For the purposes of this project, we went with an embedded SQLite database, interfaced via EF core. Using an embedded database over an external one was primarily due to time constraints and limited scope of this project. EF core is .NET's official ORM, so naturally we'd use that the C# interface with our database. We configured our DB to prioritize correctness over speed since our application isn't particularly time-sensitive.
 
-**File-backed SQLite via EF Core**, sized for a single API instance on one machine.
+- **Consistency:** Strong consistency. With a single database, every read gets
+  the latest committed write. Foreign keys and a composite primary key keep links
+  valid and unique.
+- **Durability:** `synchronous=FULL` flushes each write to disk before the API
+  responds. This trades some write speed for not losing acknowledged data.
+- **Scaling:** reads scale well, because WAL mode lets them run alongside a write,
+  but SQLite allows only one writer at a time and only one server instance.
 
-- **Consistency:** foreign keys are enforced on every connection, a composite
-  primary key `(ApplicationId, MaintainerId)` prevents duplicate links, and
-  deletions cascade to link rows only. Each write runs in a single transaction;
-  link changes check both parents and write inside one short transaction.
-  Duplicate-link PUTs use `INSERT ... ON CONFLICT DO NOTHING`.
-- **Durability:** WAL journal mode with `synchronous=FULL`, so a committed write
-  is synced to disk before the response returns, provided the storage honors
-  sync requests. Data survives restarts (verified by E2E tests).
-- **Concurrency:** WAL lets readers proceed alongside one writer. Writers wait up
-  to five seconds for the lock before returning 503.
-- **Scaling:** suited to one instance. Reads are indexed and paginated in the
-  database. SQLite allows one writer at a time and must not be shared over network
-  storage. Multiple replicas or heavy write load would require moving to
-  PostgreSQL or SQL Server, which EF Core supports with provider-specific
-  migrations.
+**Trade-off:** SQLite gives up multi-instance and high-write scale in exchange
+for strong guarantees with no database server to setup.
 
 Configuration and operations:
 
@@ -439,3 +432,6 @@ Runs: [Actions → CI](https://github.com/adrielmsft/aks-hyperscale-metadata-api
 - **Last-write-wins updates.** Simple last-write-wins over optimistic concurrency due to time constraints and low risk of conflict for this type of data.
 - **Offset pagination vs. Cursor pagination** Went with offset due to simplicity and modest scale requirements.
 - **Shared API key** Assumes API is only called by a few trusted services. Quick to implement given time constraints, but next step would be to support per-client keys or use an identity provider if the API needs to be used at a large scale.
+
+## Cost
+~10 hours of active work over the span of over 15 hours.
