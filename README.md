@@ -242,8 +242,7 @@ rate limiting.
 
 ### ⭐ Observability (highlighted feature)
 
-OpenTelemetry traces, metrics, and logs, designed to be safe by default and
-optional to export.
+OpenTelemetry traces, metrics, and logs. This supports observability into our services to enable use to debug production failures, alert us of service unhealthiness, and create service dashboards in the future.
 
 - **Traces:** one server span per request (health probes excluded). A tag
   allowlist keeps only method, status, route template, protocol, error type, and
@@ -264,14 +263,22 @@ optional to export.
   emails are never collected. Export queues are bounded (512 items, 128 per
   batch) with one-second timeouts, and failed exports never block or fail
   requests (verified by a test that points at an unreachable endpoint).
-- **Proven end to end:** CI runs a pinned `otel/opentelemetry-collector-contrib:0.147.0`
-  ([config](.github/otel-collector-config.yaml)). An E2E test sends a real request,
-  takes the `traceId` from the response, and waits until that trace and the
-  request-duration metric appear in the collector's output. Locally, the test is
-  skipped unless `OTEL_SMOKE_EXPORT_FILE` (collector output file) and
-  `OTEL_SMOKE_ENDPOINT` are set.
+- **Proven end to end:**
+  [`ObservabilityE2ETests.Collector_ReceivesRequestTraceAndDurationMetric`](tests/MetadataApi.E2E.Tests/ObservabilityE2ETests.cs)
+  starts the real API with `OTEL_EXPORTER_OTLP_ENDPOINT` pointed at a pinned
+  `otel/opentelemetry-collector-contrib:0.147.0` collector in CI
+  ([config](.github/otel-collector-config.yaml)). It sends
+  `GET /api/v1/applications/{random-id}`, expects a 404, and reads the `traceId`
+  from the Problem Details body. It then polls the collector's export file for up
+  to 30 seconds until three things appear: that exact trace ID, the
+  `http.server.request.duration` metric, and the route template
+  `/api/v1/applications/{applicationId}`. Locally, the test is skipped unless
+  `OTEL_SMOKE_EXPORT_FILE` (collector output file) and `OTEL_SMOKE_ENDPOINT` are
+  set.
 
 ### Authentication
+
+Authentication allows us gatekeep our API to a few select callers such as trusted users or services.
 
 - A single shared API key, sent as `Authorization: Bearer <key>` and configured
   through `Authentication:ApiKey` (environment variable `Authentication__ApiKey`).
@@ -286,6 +293,8 @@ optional to export.
   key in a secret store, and require HTTPS for any public deployment.
 
 ### Reliability
+
+For reliability, we implemented configurable rate limiting, body request size limits, health probes, input validation, etc. to automatically resolve or prevent issues. Overall these make our service more robust to failures.
 
 | Setting | Environment variable | Default |
 | --- | --- | --- |
@@ -309,28 +318,20 @@ All settings are validated at startup.
 - **Input validation:** strict JSON, field rules, and GUID/pagination validation
   at the API boundary. All field errors are reported together.
 
-Middleware order: observability → exception handling → rate limiting and body
-limits → authentication → authorization → endpoints.
-
 ## Storage
 
-**File-backed SQLite via EF Core**, sized for a single API instance on one machine.
+For the purposes of this project, we went with an embedded SQLite database, interfaced via EF core. Using an embedded database over an external one was primarily due to time constraints and limited scope of this project. EF core is .NET's official ORM, so naturally we'd use that the C# interface with our database. We configured our DB to prioritize correctness over speed since our application isn't particularly time-sensitive.
 
-- **Consistency:** foreign keys are enforced on every connection, a composite
-  primary key `(ApplicationId, MaintainerId)` prevents duplicate links, and
-  deletions cascade to link rows only. Each write runs in a single transaction;
-  link changes check both parents and write inside one short transaction.
-  Duplicate-link PUTs use `INSERT ... ON CONFLICT DO NOTHING`.
-- **Durability:** WAL journal mode with `synchronous=FULL`, so a committed write
-  is synced to disk before the response returns, provided the storage honors
-  sync requests. Data survives restarts (verified by E2E tests).
-- **Concurrency:** WAL lets readers proceed alongside one writer. Writers wait up
-  to five seconds for the lock before returning 503.
-- **Scaling:** suited to one instance. Reads are indexed and paginated in the
-  database. SQLite allows one writer at a time and must not be shared over network
-  storage. Multiple replicas or heavy write load would require moving to
-  PostgreSQL or SQL Server, which EF Core supports with provider-specific
-  migrations.
+- **Consistency:** Strong consistency. With a single database, every read gets
+  the latest committed write. Foreign keys and a composite primary key keep links
+  valid and unique.
+- **Durability:** `synchronous=FULL` flushes each write to disk before the API
+  responds. This trades some write speed for not losing acknowledged data.
+- **Scaling:** reads scale well, because WAL mode lets them run alongside a write,
+  but SQLite allows only one writer at a time and only one server instance.
+
+**Trade-off:** SQLite gives up multi-instance and high-write scale in exchange
+for strong guarantees with no database server to setup.
 
 Configuration and operations:
 
@@ -390,9 +391,7 @@ request:
 5. Publish test evidence and upload artifacts, **even on failure**. E2E still runs
    after a unit-test failure if the Release build succeeded.
 
-**Where exam reviewers should look:** open a run and check its green job status
-(the summary is evidence, not a substitute for a successful run). The job summary
-contains:
+The job summary contains:
 
 - **Unit & SQLite integration** and **Real HTTP E2E (Kestrel process)**: every
   discovered test case grouped by class, including theory cases, with pass/fail/skip
@@ -424,27 +423,18 @@ Runs: [Actions → CI](https://github.com/adrielmsft/aks-hyperscale-metadata-api
 
 ## Key design decisions
 
-- **Many-to-many links managed as a sub-resource.** Applications and maintainers
-  have independent lifecycles; idempotent `PUT`/`DELETE` on the link path avoids
-  a separate association ID.
-- **GUID IDs, never names in paths.** Titles, names, and emails can change or
-  repeat.
-- **Strict input over lenient input.** Unknown properties and out-of-range
-  pagination values are rejected, not ignored or clamped, so client bugs show up
-  immediately.
+- **Separate data model for the Maintainer–Application relationship.** A
+  dedicated `ApplicationMaintainers` table (composite key
+  `(ApplicationId, MaintainerId)`) links the two resources instead of embedding
+  maintainers in each application. This supports many-to-many relationships and keeps the
+  relationship separate from each resource's properties.
+- **GUID IDs, never names in paths.** Titles and names can change or
+  repeat. Having a generated GUID guarantees uniqueness.
 - **Correctness over write throughput.** SQLite runs with `synchronous=FULL`,
-  foreign keys, a bounded lock wait, and no blind retries.
-- **Last-write-wins updates.** Optimistic concurrency (ETags) is a documented
-  non-goal for this scope; transactions protect integrity but not against lost
-  updates.
-- **Offset pagination capped at 10,000.** Simple and predictable for this size; a
-  larger catalog would use cursor pagination.
-- **Shared API key instead of an identity provider.** Secure and standard for a
-  single-tenant service API. Per-client keys or Entra ID/OAuth would be the next
-  step.
-- **Observability that is off by default to export but always safe.**
-  Instrumentation is always on; export is opt-in through standard OTel settings.
-  Privacy is enforced by allowlists rather than denylists.
-- **Out of scope:** PATCH, search, bulk operations, idempotency keys, request
-  timeouts (would need tests of what happens when a write is cancelled mid-commit),
-  distributed rate limiting, dashboards and alerting.
+  foreign keys, a bounded lock wait, and no blind retries. This assumes the nature of this application isn't time-sensitive and correctness is essential.
+- **Last-write-wins updates.** Simple last-write-wins over optimistic concurrency due to time constraints and assumption of low risk of conflict for this type of data.
+- **Offset pagination vs. Cursor pagination** Went with offset due to simplicity and assuming modest scale requirements.
+- **Shared API key** Assumes API is only called by a few trusted services. Quick to implement given time constraints, but next step would be to support per-client keys or use an identity provider if the API needs to be used at a large scale.
+
+## Cost
+~10 hours of active work over the span of over 15 hours.
