@@ -133,6 +133,88 @@ Errors use `application/problem+json`:
 Use the Development OpenAPI document for operation schemas and
 [MetadataApi.http](src/MetadataApi/MetadataApi.http) for successful and failing requests.
 
+## Maintainer API
+
+| Method | Path | Success |
+| --- | --- | --- |
+| POST | `/api/v1/maintainers` | 201 with the created resource and a Location header |
+| GET | `/api/v1/maintainers/{maintainerId}` | 200 with the stored resource |
+| PUT | `/api/v1/maintainers/{maintainerId}` | 200 with the fully replaced resource |
+| DELETE | `/api/v1/maintainers/{maintainerId}` | 204 with no body |
+| GET | `/api/v1/maintainers?limit=20&offset=0` | 200 with a bounded page |
+
+Create or fully replace contact metadata with a JSON body:
+
+```json
+{
+  "name": "Garage Makers",
+  "email": "Garage.Makers@example.com"
+}
+```
+
+Example resource response (POST generates the ID; PUT keeps it unchanged):
+
+```json
+{
+  "id": "54b28c61-8ec5-42c1-966b-3564c59bf965",
+  "name": "Garage Makers",
+  "email": "Garage.Makers@example.com"
+}
+```
+
+Both `name` and `email` are required on POST and PUT; omitted, null, or blank
+values return 400. Text is trimmed before validation and storage, preserving
+internal whitespace and casing. Names allow Unicode and are limited to 200
+UTF-16 code units; email is limited to 254. Single-line fields reject control
+characters. Email uses .NET `EmailAddressAttribute` basic syntax validation and
+rejects display-name forms such as `Garage <garage@example.com>`. No DNS,
+ownership, or deliverability checks are performed. Duplicate names and emails
+are allowed: maintainers are contact metadata, not authenticated identities.
+
+JSON uses exact camelCase property names. Unknown properties (including `id`),
+duplicate properties, malformed JSON, and wrong value types return 400.
+IDs are server-generated, immutable, non-empty GUIDs. Invalid/empty route GUIDs
+return 400; syntactically valid missing IDs return 404, including on PUT and
+DELETE. PUT is a full replacement, not an upsert; last write wins without
+optimistic concurrency. Updates preserve application links. Deletion removes
+only the maintainer and its links, never the associated applications.
+
+Collection responses use this envelope:
+
+```json
+{
+  "items": [
+    {
+      "id": "54b28c61-8ec5-42c1-966b-3564c59bf965",
+      "name": "Garage Makers",
+      "email": "Garage.Makers@example.com"
+    }
+  ],
+  "limit": 20,
+  "offset": 0,
+  "nextOffset": null
+}
+```
+
+`limit` defaults to 20 and must be an integer from 1 through 100. `offset`
+defaults to 0 and must be an integer from 0 through 10000. Invalid values
+return 400, never clamping. Results are ordered in SQLite by ID ascending and
+use bounded offset pagination with one-row lookahead. `nextOffset` is present
+as a number only when more records exist and the next offset is supported;
+otherwise it is null. Empty or beyond-end pages return 200 with empty `items`.
+Pages are not snapshots: concurrent writes can change subsequent pages.
+
+Errors use `application/problem+json`, with field-keyed `errors` for metadata,
+route-ID, and pagination validation. POST and PUT require a supported JSON
+content type (otherwise 415). Database contention returns 503 after the existing
+five-second bounded lock wait, without changing the requested resource.
+Unexpected failures return 500 without exposing exception details.
+
+Maintainer validation and service tests, real SQLite-backed API tests, and
+separate-process `MaintainerE2ETests` cover CRUD, replacement, duplicates,
+Unicode and length boundaries, rejected input, pagination, persistence after
+restart, cascade safety, cancellation, and bounded contention failures.
+
 ## Database configuration
 
 - The default database is `metadata.db` under the API project's content root
