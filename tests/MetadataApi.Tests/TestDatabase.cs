@@ -6,7 +6,7 @@ namespace MetadataApi.Tests;
 internal sealed class TestDatabase : IDisposable
 {
     private readonly string directory = Path.Combine(
-        Path.GetTempPath(), $"metadata-api-tests-{Guid.NewGuid():N}");
+        AppContext.BaseDirectory, "artifacts", $"metadata-api-tests-{Guid.NewGuid():N}");
     private bool disposed;
 
     public string FilePath => Path.Combine(directory, "metadata.db");

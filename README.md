@@ -19,6 +19,54 @@ Authentication and telemetry are not implemented yet.
 
 Run the following commands from the repository root.
 
+## Authentication
+
+Shared API-key authentication is now required; this section supersedes the older
+unauthenticated status notes above and below. Before following **Build and run**,
+generate a random key in the same PowerShell terminal (environment variables are
+the simplest local setup; no user-secrets configuration is required):
+
+```powershell
+$env:Authentication__ApiKey = [Convert]::ToHexString([System.Security.Cryptography.RandomNumberGenerator]::GetBytes(32))
+dotnet tool restore
+dotnet build MetadataApi.slnx
+dotnet ef database update --project src\MetadataApi
+dotnet run --project src\MetadataApi --launch-profile http
+```
+
+`Authentication:ApiKey` (environment variable `Authentication__ApiKey`) must be
+nonblank and at least 32 characters; options validation fails startup otherwise.
+Do not commit the generated value, paste it into logs, or reuse a test key in
+production. Provision the key through your deployment's secret configuration.
+Require HTTPS for public deployments. All authenticated clients have shared
+administrative access, not per-maintainer permissions.
+
+Send `Authorization: Bearer <api-key>` on every `/api/v1/**` request, including
+future resource endpoints. Missing/invalid credentials return the same `401`
+`application/problem+json` response with `WWW-Authenticate: Bearer`, before any
+resource lookup. Keys are compared using constant-time SHA-256 hash comparison.
+The default/fallback authorization policy protects new endpoints automatically;
+new health endpoints must explicitly call `.AllowAnonymous()`. `/health/live`
+and the Development-only `/openapi/v1.json` document are explicitly anonymous.
+
+For the PowerShell resource examples below, supply `-Headers $headers` on each
+`Invoke-RestMethod` call:
+
+```powershell
+$headers = @{ Authorization = "Bearer $env:Authentication__ApiKey" }
+Invoke-RestMethod -Uri http://localhost:5108/api/v1/applications -Headers $headers
+```
+
+`MetadataApi.http` reads the key from the `Authentication__ApiKey` process
+environment variable. Launch your HTTP client/editor from the configured terminal,
+or set its local, untracked variable `apiKey`; never save a real key in that file.
+The API test factory supplies a test-only key and default client header; use
+`CreateUnauthenticatedClient()` for negative tests. Real-process E2E fixtures
+use a random key per fixture (or the CI-generated ephemeral key), pass it only
+through the server environment, and expose an unauthenticated client. CI masks
+its ephemeral key and supplies it only to the E2E test step; no production secret
+is needed.
+
 ## Build and run
 
 ```powershell

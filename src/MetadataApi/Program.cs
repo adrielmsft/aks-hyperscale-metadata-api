@@ -1,4 +1,5 @@
 using System.Text.Json.Serialization;
+using MetadataApi.Authentication;
 using MetadataApi.Endpoints;
 using MetadataApi.Middleware;
 using MetadataApi.Persistence;
@@ -10,6 +11,7 @@ builder.Services.AddDbContext<MetadataDbContext>(options =>
     options.UseMetadataSqlite(
         builder.Configuration["Database:Path"],
         builder.Environment.ContentRootPath));
+builder.Services.AddApiKeyAuthentication(builder.Configuration);
 builder.Services.AddOpenApi();
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<DatabaseExceptionHandler>();
@@ -36,13 +38,15 @@ await using (var scope = app.Services.CreateAsyncScope())
 
 app.UseExceptionHandler();
 app.UseStatusCodePages();
+app.UseAuthentication();
+app.UseAuthorization();
 
 if (app.Environment.IsDevelopment())
 {
-    app.MapOpenApi();
+    app.MapOpenApi().AllowAnonymous();
 }
 
-app.MapHealthChecks("/health/live");
+app.MapHealthChecks("/health/live").AllowAnonymous();
 app.MapApplications();
 app.MapMaintainers();
 app.MapApplicationMaintainers();
